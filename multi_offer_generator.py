@@ -7,6 +7,7 @@ import streamlit as st
 import os
 import zipfile
 import io
+import re
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import sqlite3
@@ -255,8 +256,7 @@ class MultiCompanyOfferGenerator:
                     f"PV-Modul-Modell für {company['name']}",
                     ["Vitovolt 300-DG M440HC (440 Wp)", "Modul X (500 Wp)", "Modul Y (600 Wp)"],
                     key=f"module_select_{company_id}"
-                )
-
+                )   
                 module_price = st.number_input(
                     f"Preis pro Modul für {company['name']} (€)",
                     min_value=0.0,
@@ -267,37 +267,41 @@ class MultiCompanyOfferGenerator:
 
                 st.write(f"**Ausgewählte Konfiguration für {company['name']}:**")
                 st.write(f"- Anzahl PV-Module: {module_quantity}")
-                st.write(f"- PV-Modul-Modell: {selected_module}")
+                st.write(f"- PV-Modul-Modell: {selected_module}")                
                 st.write(f"- Preis pro Modul: {module_price:.2f} €")
-            
-        # Angebotsspezifische Einstellungen
-        st.markdown("#### 📄 Angebots-Einstellungen")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            offer_title = st.text_input(
-                "Angebots-Titel",
-                value=f"Ihr individuelles PV-Angebot von {company_id}",
-                key=f"offer_title_{company_id}"
-            )
-            
-        with col2:
-            offer_validity_days = st.number_input(
-                "Gültigkeit (Tage)",
-                min_value=1,
-                max_value=365,
-                value=30,
-                key=f"offer_validity_{company_id}"
-            )
-            
-        # Cover Letter
-        cover_letter = st.text_area(
-            "Anschreiben-Text",
-            value=f"""Sehr geehrte/r {{salutation_line}},
+                
+                # Speichere aktuelles company_id für die Angebots-Einstellungen
+                current_company_id = company_id
+                current_company_name = company['name']
+                
+                # Angebotsspezifische Einstellungen
+                st.markdown("#### 📄 Angebots-Einstellungen")
+                
+                col1, col2 = st.columns(2)                
+                with col1:
+                    offer_title = st.text_input(
+                        "Angebots-Titel",
+                        value=f"Ihr individuelles PV-Angebot von {current_company_name}",
+                        key=f"offer_title_{current_company_id}"
+                    )
+                    
+                with col2:
+                    offer_validity_days = st.number_input(
+                        "Gültigkeit (Tage)",
+                        min_value=1,
+                        max_value=365,
+                        value=30,
+                        key=f"offer_validity_{current_company_id}"
+                    )
+                    
+                # Cover Letter
+                cover_letter = st.text_area(
+                    "Anschreiben-Text",
+                    value=f"""Sehr geehrte/r {{salutation_line}},
 
 vielen Dank für Ihr Interesse an einer Photovoltaikanlage. Gerne unterbreiten wir Ihnen unser maßgeschneidertes Angebot.
 
-Mit {company['name']} entscheiden Sie sich für:
+Mit {current_company_name} entscheiden Sie sich für:
 • Premium-Qualität und langjährige Erfahrung
 • Persönliche Beratung und Service
 • Faire Preise bei höchster Qualität
@@ -305,30 +309,74 @@ Mit {company['name']} entscheiden Sie sich für:
 Wir freuen uns auf Ihre Rückmeldung!
 
 Mit freundlichen Grüßen
-Ihr Team von {company['name']}""",
-            height=200,
-            key=f"cover_letter_{company_id}"
-        )
-        
-        # Konfiguration in Session State speichern
-        config_key = f"company_config_{company_id}"
-        st.session_state[config_key] = {
-            "company_id": company_id,
-            "company_name": company_name,
-            "selected_module": selected_module if 'modul' in products else None,
-            "module_quantity": module_quantity if 'modul' in products else 0,
-            "selected_inverter": selected_inverter if 'wechselrichter' in products else None,
-            "selected_storage": selected_storage if include_storage else None,
-            "include_storage": include_storage,
-            "include_wallbox": include_wallbox,
-            "offer_title": offer_title,
-            "offer_validity_days": offer_validity_days,
-            "cover_letter": cover_letter
-        }
-        
-        # Kostenübersicht anzeigen
-        if 'modul' in products and 'wechselrichter' in products:
-            self.show_cost_preview(company_id)
+Ihr Team von {current_company_name}""",
+                    height=200,
+                    key=f"cover_letter_{current_company_id}"                )
+                
+                # Produktdaten für diese Firma laden
+                products = self.get_company_products(company_id)
+                
+                # Wechselrichter-Auswahl
+                selected_inverter = None
+                if 'wechselrichter' in products and products['wechselrichter']:
+                    inverter_options = [f"{p['brand']} {p['model_name']}" for p in products['wechselrichter']]
+                    selected_inverter_name = st.selectbox(
+                        f"Wechselrichter für {company['name']}",
+                        inverter_options,
+                        key=f"inverter_select_{company_id}"
+                    )
+                    # Ausgewählten Wechselrichter finden
+                    for inverter in products['wechselrichter']:
+                        if f"{inverter['brand']} {inverter['model_name']}" == selected_inverter_name:
+                            selected_inverter = inverter
+                            break
+                
+                # Speicher-Option                include_storage = st.checkbox(
+                    f"Batteriespeicher hinzufügen für {company['name']}",
+                    value=False,
+                    key=f"include_storage_{company_id}"
+                        
+                # Speicher-Auswahl wenn aktiviert
+                selected_storage = None
+                if include_storage and 'batteriespeicher' in products and products['batteriespeicher']:
+                    storage_options = [f"{p['brand']} {p['model_name']}" for p in products['batteriespeicher']]
+                    selected_storage_name = st.selectbox(
+                        f"Speicher-Modell für {company['name']}",
+                        storage_options,
+                        key=f"storage_select_{company_id}"
+                    )
+                    # Ausgewählten Speicher finden
+                    for storage in products['batteriespeicher']:
+                        if f"{storage['brand']} {storage['model_name']}" == selected_storage_name:
+                            selected_storage = storage
+                            break
+                
+                # Wallbox-Option
+                include_wallbox = st.checkbox(
+                    f"Wallbox hinzufügen für {company['name']}",
+                    value=False,
+                    key=f"include_wallbox_{company_id}"
+                )
+                
+                # Konfiguration in Session State speichern
+                config_key = f"company_config_{company_id}"
+                st.session_state[config_key] = {
+                    "company_id": company_id,
+                    "company_name": company["name"],
+                    "selected_module": selected_module,
+                    "module_quantity": module_quantity,
+                    "selected_inverter": selected_inverter,
+                    "selected_storage": selected_storage,
+                    "include_storage": include_storage,
+                    "include_wallbox": include_wallbox,
+                    "offer_title": offer_title,
+                    "offer_validity_days": offer_validity_days,
+                    "cover_letter": cover_letter
+                }
+                
+                # Kostenübersicht anzeigen
+                if products and 'modul' in products and 'wechselrichter' in products:
+                    self.show_cost_preview(company_id)
             
     def show_cost_preview(self, company_id: int):
         """Zeigt Kostenvorschau für eine Firma"""
@@ -454,8 +502,7 @@ Ihr Team von {company['name']}""",
                         company_name_clean = "".join(c for c in company_info['name'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
                         filename = f"Angebot_{company_name_clean}_{offer_number}.pdf"
                         
-                        # PDF zur ZIP hinzufügen
-                        zip_file.writestr(filename, pdf_bytes)
+                        # PDF zur ZIP hinzufügen                        zip_file.writestr(filename, pdf_bytes)
                         
                     else:
                         st.warning(f"⚠️ PDF für {company_info['name']} konnte nicht erstellt werden")
@@ -471,9 +518,26 @@ Ihr Team von {company['name']}""",
         """Berechnet einfache Analyse-Ergebnisse"""
         analysis = {}
         
-        # Anlagengröße berechnen
-        if config.get('selected_module') and config.get('module_quantity'):
-            total_kwp = (config['selected_module']['capacity_w'] * config['module_quantity']) / 1000
+        # Anlagengröße berechnen - Verarbeitung des ausgewählten Moduls
+        selected_module = config.get('selected_module')
+        module_quantity = config.get('module_quantity', 0)
+        
+        if selected_module and module_quantity:
+            # Kapazität aus dem Modulnamen extrahieren, wenn es ein String ist
+            if isinstance(selected_module, str):
+                # Versuche, die Leistung aus dem Modulnamen zu extrahieren (z.B. "Modul X (500 Wp)")
+                import re
+                match = re.search(r'(\d+)\s*Wp', selected_module)
+                if match:
+                    capacity_w = float(match.group(1))
+                else:
+                    # Standardwert, wenn keine Leistungsangabe gefunden wurde
+                    capacity_w = 400.0  # Annahme: 400 Watt pro Modul als Standard
+            else:
+                # Falls es ein Dictionary ist mit Kapazitätsangabe
+                capacity_w = selected_module.get('capacity_w', 400.0)
+                
+            total_kwp = (capacity_w * module_quantity) / 1000
             analysis['anlage_kwp'] = total_kwp
             
             # Geschätzte jährliche Produktion (950 kWh/kWp als Standard)
@@ -484,12 +548,24 @@ Ihr Team von {company['name']}""",
             
         # Gesamtinvestition berechnen
         total_cost = 0
-        if config.get('selected_module'):
-            total_cost += config['selected_module']['price_euro'] * config.get('module_quantity', 0)
-        if config.get('selected_inverter'):
-            total_cost += config['selected_inverter']['price_euro']
-        if config.get('selected_storage'):
-            total_cost += config['selected_storage']['price_euro']
+        
+        # Modulkosten
+        if selected_module:
+            if isinstance(selected_module, dict) and 'price_euro' in selected_module:
+                module_price = selected_module['price_euro']
+            else:
+                # Wenn es kein Dictionary ist oder keine Preisangabe hat, verwenden wir den eingegebenen Preis
+                module_price = config.get('module_price', 100.0)
+                
+            total_cost += module_price * module_quantity
+            
+        # Wechselrichterkosten
+        if config.get('selected_inverter') and isinstance(config['selected_inverter'], dict):
+            total_cost += config['selected_inverter'].get('price_euro', 0)
+            
+        # Speicherkosten
+        if config.get('selected_storage') and isinstance(config['selected_storage'], dict):
+            total_cost += config['selected_storage'].get('price_euro', 0)
             
         analysis['total_investment_cost'] = total_cost
         
@@ -660,11 +736,9 @@ Ihr Team von {company['name']}""",
                     continue
                     
                 status_text.text(f"Generiere Angebot für {company['name']}...")
-                
-                # Konfiguration laden
+                  # Konfiguration laden
                 config_key = f"company_config_{company_id}"
-                config = st.session_state.get(config_key, {}
-                )
+                config = st.session_state.get(config_key, {})
                 
                 # PDF generieren (simuliert)
                 pdf_filename = f"Angebot_{company['name'].replace(' ', '_')}.pdf"
@@ -708,8 +782,7 @@ Ihr Team von {company['name']}""",
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for filename, content in pdf_dict.items():
                 # Simulation - in echter Implementierung wären das PDF-Bytes
-                zip_file.writestr(filename, content.encode('utf-8'))
-        
+                zip_file.writestr(filename, content.encode('utf-8'))        
         zip_buffer.seek(0)
         return zip_buffer.getvalue()
         
@@ -717,12 +790,18 @@ Ihr Team von {company['name']}""",
         """Rendert die Produktauswahl und Konfiguration pro Firma"""
         st.subheader("📦 Produktauswahl pro Firma")
 
-        if not self.selected_companies:
+        if not st.session_state.multi_offer_selected_companies:
             st.warning("⚠️ Bitte wählen Sie zuerst Firmen aus, bevor Sie Produkte konfigurieren.")
             return
 
-        for company_id in self.selected_companies:
-            company = get_company(company_id)
+        companies = self.get_available_companies()
+        company_dict = {c['id']: c for c in companies}
+        
+        for company_id in st.session_state.multi_offer_selected_companies:
+            company = company_dict.get(company_id)
+            if not company:
+                continue
+                
             st.markdown(f"### {company['name']}")
 
             products_by_category = self.get_company_products(company_id)

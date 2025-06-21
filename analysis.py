@@ -21,6 +21,16 @@ import os
 from reportlab.lib import colors # Für HexColor Zugriff
 import colorsys # Für HLS/RGB Konvertierungen
 
+# HINZUGEFÜGT: Import der kompletten Finanz-Tools
+from financial_tools import (
+    calculate_annuity, 
+    calculate_depreciation, 
+    calculate_leasing_costs,
+    calculate_financing_comparison,
+    calculate_capital_gains_tax,
+    calculate_contracting_costs
+)
+
 try:
     from app_status import import_errors as global_import_errors_analysis
 except ImportError:
@@ -119,7 +129,6 @@ def load_viz_settings(db_load_func: Optional[callable] = None) -> Dict[str, Any]
             if db_settings and isinstance(db_settings, dict):
                 settings.update(db_settings)
         except Exception:
-            # Bei DB-Fehler einfach Defaults verwenden
             pass
     return settings
 
@@ -234,7 +243,7 @@ def _add_chart_controls(chart_key_prefix: str, texts: Dict[str,str], default_typ
             st.session_state[key_color_palette] = new_palette
         else:
             new_primary_color = st.color_picker(get_text(texts, "chart_primary_color_label", "Primärfarbe"), value=st.session_state.get(key_primary_color), key=f"cp_{key_primary_color}")
-            new_secondary_color = st.color_picker(get_text(texts, "chart_secondary_color_label", "Sekundärfarbe (optional)"), value=st.session_state.get(key_secondary_color), key=f"cp_{key_secondary_color}")
+            new_secondary_color = st.color_picker(get_text(texts, "chart_secondary_color_label", "Sekundärfarbe (optional)"), value=st.session_state.get(key_secondaryColor), key=f"cp_{key_secondary_color}")
             st.session_state[key_primary_color] = new_primary_color
             st.session_state[key_secondary_color] = new_secondary_color
     st.markdown("---")
@@ -372,18 +381,24 @@ def render_tariff_cube_switcher(analysis_results: Dict[str, Any], texts: Dict[st
     st.subheader(get_text(texts, "viz_tariff_cube_switcher", "⚖️ Tarifvergleich – Anbieter als 3D-Balken (Illustrativ)"))
     anbieter=['Aktuell','PV-Strom','Alternativ A','Alternativ B']
     aktueller_preis_kwh=float(analysis_results.get('aktueller_strompreis_fuer_hochrechnung_euro_kwh',0.30))
-    lcoe_raw=analysis_results.get('lcoe_euro_per_kwh',0.12);
+    lcoe_raw=analysis_results.get('lcoe_euro_per_kwh',0.12)
     lcoe = float(lcoe_raw) if isinstance(lcoe_raw, (int,float)) and not math.isinf(lcoe_raw) and not math.isnan(lcoe_raw) else 0.12
     jahresverbrauch=float(analysis_results.get('total_consumption_kwh_yr',3500.0))
     if jahresverbrauch <= 0: jahresverbrauch = 3500.0
-    grundgebuehr=[60,0,80,70]; arbeitspreis=[aktueller_preis_kwh,lcoe,aktueller_preis_kwh*0.95,aktueller_preis_kwh*1.05]
+    grundgebuehr=[60,0,80,70]
+    arbeitspreis=[aktueller_preis_kwh,lcoe,aktueller_preis_kwh*0.95,aktueller_preis_kwh*1.05]
     gesamt=[g+a*jahresverbrauch for g,a in zip(grundgebuehr,arbeitspreis)]
     fig=go.Figure()
     color_sequence = viz_settings.get("colorway", px.colors.qualitative.Plotly)
-    if not color_sequence or len(color_sequence) < len(anbieter) : color_sequence = px.colors.qualitative.Plotly
+    if not color_sequence or len(color_sequence) < len(anbieter):
+        color_sequence = px.colors.qualitative.Plotly
     for i,(anbieter_name,cost) in enumerate(zip(anbieter,gesamt)):
         fig.add_trace(go.Scatter3d(x=[i,i],y=[0,0],z=[0,cost],mode='lines',line=dict(width=30,color=color_sequence[i%len(color_sequence)]),name=f"{anbieter_name} ({arbeitspreis[i]:.2f}€/kWh + {grundgebuehr[i]}€ GG)"))
-    fig.update_layout(title=get_text(texts,"viz_tariff_cube_title_switcher",f"Illustrativer Tarifvergleich bei {jahresverbrauch:.0f} kWh/Jahr"),scene=dict(xaxis=dict(title='Anbieter',tickvals=list(range(len(anbieter))),ticktext=anbieter),yaxis=dict(title=''),zaxis=dict(title='Gesamtkosten €/Jahr')),margin=dict(l=0,r=0,b=0,t=60),showlegend=True)
+    fig.update_layout(
+        title=get_text(texts,"viz_tariff_cube_title_switcher",f"Illustrativer Tarifvergleich bei {jahresverbrauch:.0f} kWh/Jahr"),
+        scene=dict(xaxis=dict(title='Anbieter',tickvals=list(range(len(anbieter))),ticktext=anbieter),yaxis=dict(title=''),zaxis=dict(title='Gesamtkosten €/Jahr')),
+        margin=dict(l=0,r=0,b=0,t=60),showlegend=True
+    )
     _apply_custom_style_to_fig(fig,viz_settings,"tariff_cube_switcher")
     st.plotly_chart(fig,use_container_width=True,key="analysis_tariff_cube_switcher_key_v6_final")
     analysis_results['tariff_cube_switcher_chart_bytes']=_export_plotly_fig_to_bytes(fig,texts)
@@ -512,7 +527,7 @@ def render_co2_savings_value_switcher(analysis_results: Dict[str, Any],
         title=dict(
             text=get_text(texts,
                           "viz_co2_savings_value_title_switcher",
-                          "CO₂-Einsparung und simulierter monetärer Wert über Zeit"),
+                          "CO₂-Einsparnis und simulierter monetärer Wert über Zeit"),
             font=dict(size=16)
         ),
         scene=dict(
@@ -520,7 +535,7 @@ def render_co2_savings_value_switcher(analysis_results: Dict[str, Any],
             yaxis=dict(
                 title='Kategorie',
                 tickvals=[0, 1],
-                ticktext=['CO₂-Ersparung', 'Monetärer Wert']
+                ticktext=['CO₂-Ersparnis', 'Monetärer Wert']
             ),
             zaxis=dict(title='Menge'),
             camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
@@ -568,6 +583,128 @@ def render_co2_savings_value_switcher(analysis_results: Dict[str, Any],
             value=f"{avg_annual_co2:.2f} Tonnen",
             help="Durchschnittliche jährliche CO₂-Einsparung"
         )
+
+def render_co2_savings_value_switcher(analysis_results: Dict[str, Any],
+                                        texts: Dict[str, str],
+                                        viz_settings: Dict[str, Any]):
+    st.subheader(get_text(texts,
+                          "viz_co2_savings_value_switcher",
+                          "🌍 CO₂-Ersparnis vs. Monetärer Wert (Simuliert)"))
+
+    try:
+        from pv_visuals import render_co2_savings_visualization
+        render_co2_savings_visualization(analysis_results, texts)
+        st.markdown("---")
+    except ImportError as e:
+        st.warning(f"CO₂-Visualisierung konnte nicht geladen werden: {e}")
+
+    years_effective = int(analysis_results.get('simulation_period_years_effective', 0))
+    if years_effective <= 0:
+        st.warning(get_text(texts,
+                            "viz_data_invalid_years_co2_switcher_v2",
+                            "Ungültige Simulationsdauer für CO2-Diagramm."))
+        analysis_results['co2_savings_value_switcher_chart_bytes'] = None
+        return
+
+    jahre_axis = np.arange(1, years_effective + 1)
+    annual_prod_sim_raw = analysis_results.get('annual_productions_sim', [])
+    if not (isinstance(annual_prod_sim_raw, list)
+            and len(annual_prod_sim_raw) == years_effective):
+        st.warning(get_text(texts,
+                            "viz_data_missing_co2_prod_switcher_v2",
+                            "CO2: Jährl. Produktionsdaten unvollständig."))
+        analysis_results['co2_savings_value_switcher_chart_bytes'] = None
+        return
+
+    annual_prod_sim = [
+        float(p) if isinstance(p, (int, float))
+        and not math.isnan(p)
+        and not math.isinf(p) else 0.0
+        for p in annual_prod_sim_raw
+    ]
+    gc = load_admin_setting('global_constants', {})
+    co2_factor = float(gc.get('co2_emission_factor_kg_per_kwh', 0.474))
+    co2_savings_tonnes_per_year = [
+        prod * co2_factor / 1000.0 for prod in annual_prod_sim
+    ]
+
+    co2_price_eur = 55
+    co2_price_increase = 0.08
+    wert_co2_eur_per_year = [
+        s * (co2_price_eur * ((1 + co2_price_increase) ** (y - 1)))
+        for y, s in enumerate(co2_savings_tonnes_per_year, 1)
+    ]
+
+    if any(math.isnan(v) or math.isinf(v) for v in wert_co2_eur_per_year):
+        st.warning(get_text(texts,
+                            "viz_data_nan_inf_co2_switcher_v2",
+                            "CO2: Ungültige Werte (NaN/Inf) in Diagrammdaten."))
+        analysis_results['co2_savings_value_switcher_chart_bytes'] = None
+        return
+
+    import plotly.graph_objects as go
+    import plotly.express as px
+
+    selected_palette = viz_settings.get("default_color_palette", "Viridis")
+    valid_scales = ['Greens', 'Blues', 'Viridis', 'Plotly3', 'Solar', 'Hot']
+    scale_co2 = selected_palette if selected_palette in valid_scales else "Greens"
+    scale_value = "Blues"
+
+    fig = go.Figure()
+
+    for xi, zi in zip(jahre_axis, co2_savings_tonnes_per_year):
+        fig.add_trace(go.Scatter3d(
+            x=[xi, xi], y=[0, 0], z=[0, zi], mode='lines',
+            line=dict(color=px.colors.sequential.__getattribute__(scale_co2)[-1], width=12),
+            showlegend=False
+        ))
+    fig.add_trace(go.Scatter3d(
+        x=jahre_axis, y=[0] * years_effective, z=co2_savings_tonnes_per_year,
+        mode='markers',
+        marker=dict(color=co2_savings_tonnes_per_year, colorscale=scale_co2, size=6, showscale=False),
+        name='CO₂-Einsparung (t)'
+    ))
+
+    for xi, zi in zip(jahre_axis, wert_co2_eur_per_year):
+        fig.add_trace(go.Scatter3d(
+            x=[xi, xi], y=[1, 1], z=[0, zi], mode='lines',
+            line=dict(color=px.colors.sequential.__getattribute__(scale_value)[-1], width=12),
+            showlegend=False
+        ))
+    fig.add_trace(go.Scatter3d(
+        x=jahre_axis, y=[1] * years_effective, z=wert_co2_eur_per_year,
+        mode='markers',
+        marker=dict(color=wert_co2_eur_per_year, colorscale=scale_value, size=6, showscale=True, colorbar=dict(title='Wert (€)')),
+        name='Monetärer Wert (€)'
+    ))
+
+    fig.update_layout(
+        title=dict(text=get_text(texts, "viz_co2_savings_value_title_switcher", "CO₂-Ersparnis und simulierter monetärer Wert über Zeit"), font=dict(size=16)),
+        scene=dict(
+            xaxis=dict(title='Jahr'),
+            yaxis=dict(title='Kategorie', tickvals=[0, 1], ticktext=['CO₂-Ersparnis', 'Monetärer Wert']),
+            zaxis=dict(title='Menge'),
+            camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
+        ),
+        margin=dict(l=0, r=0, b=0, t=60),
+        legend=dict(orientation='h', yanchor='bottom', y=0.02, xanchor='center', x=0.5),
+        template='plotly_white'
+    )
+
+    _apply_custom_style_to_fig(fig, viz_settings, "co2_savings_value_switcher")
+    st.plotly_chart(fig, use_container_width=True, key="analysis_co2_savings_value_switcher_key_v6_final")
+    analysis_results['co2_savings_value_switcher_chart_bytes'] = _export_plotly_fig_to_bytes(fig, texts)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        total_co2_savings = sum(co2_savings_tonnes_per_year)
+        st.metric(label="Gesamte CO₂-Einsparung", value=f"{total_co2_savings:.1f} Tonnen", help=f"Über {years_effective} Jahre hinweg")
+    with col2:
+        total_co2_value = sum(wert_co2_eur_per_year)
+        st.metric(label="Gesamtwert CO₂-Einsparung", value=f"{total_co2_value:.0f} €", help="Basierend auf prognostizierter CO₂-Preisentwicklung")
+    with col3:
+        avg_annual_co2 = total_co2_savings / years_effective if years_effective > 0 else 0
+        st.metric(label="Durchschnitt pro Jahr", value=f"{avg_annual_co2:.2f} Tonnen", help="Durchschnittliche jährliche CO₂-Einsparung")
 
 def render_investment_value_switcher(analysis_results: Dict[str, Any], texts: Dict[str, str], viz_settings: Dict[str, Any]):
     st.subheader(get_text(texts, "viz_investment_value_subheader_switcher", "🛠️ Investitionsnutzwert – Wirkung von Maßnahmen (Illustrativ)"))
@@ -617,6 +754,59 @@ def render_storage_effect_switcher(analysis_results: Dict[str, Any], texts: Dict
     _apply_custom_style_to_fig(fig,viz_settings,"storage_effect_switcher")
     st.plotly_chart(fig,use_container_width=True,key="analysis_storage_effect_switcher_key_v6_final")
     analysis_results['storage_effect_switcher_chart_bytes']=_export_plotly_fig_to_bytes(fig,texts)
+
+def render_selfuse_stack_switcher(analysis_results: Dict[str, Any], texts: Dict[str, str], viz_settings: Dict[str, Any]):
+    st.subheader(get_text(texts, "viz_selfuse_stack_subheader_switcher", "🏘️ Eigenverbrauch vs. Einspeisung – Jährlicher 3D Stack"))
+    years_effective=int(analysis_results.get('simulation_period_years_effective',0))
+    if years_effective <= 0: st.info(get_text(texts,"viz_data_insufficient_selfuse_stack","Simulationsdauer 0, Eigenverbrauchs-Stack nicht anzeigbar.")); analysis_results['selfuse_stack_switcher_chart_bytes']=None; return
+    jahre_sim_labels=[f"Jahr {i}" for i in range(1,years_effective+1)]; annual_prod_sim_raw=analysis_results.get('annual_productions_sim',[])
+    annual_prod_sim=[float(p) for p in annual_prod_sim_raw if isinstance(p,(int,float)) and not math.isnan(p) and not math.isinf(p)]
+    if not (annual_prod_sim and len(annual_prod_sim)==years_effective):
+        st.info(get_text(texts,"viz_data_insufficient_selfuse_stack_prod",f"Daten für 'annual_productions_sim' unvollständig.")); analysis_results['selfuse_stack_switcher_chart_bytes']=None; return
+    monthly_direct_sc_yr1_sum=sum(float(v) for v in analysis_results.get('monthly_direct_self_consumption_kwh',[]) if isinstance(v,(int,float)) and not math.isnan(v) and not math.isinf(v))
+    monthly_storage_discharge_sc_yr1_sum=sum(float(v) for v in analysis_results.get('monthly_storage_discharge_for_sc_kwh',[]) if isinstance(v,(int,float)) and not math.isnan(v) and not math.isinf(v))
+    eigenverbrauch_yr1_kwh=monthly_direct_sc_yr1_sum+monthly_storage_discharge_sc_yr1_sum
+    einspeisung_yr1_kwh=sum(float(v) for v in analysis_results.get('monthly_feed_in_kwh',[]) if isinstance(v,(int,float)) and not math.isnan(v) and not math.isinf(v))
+    produktion_yr1_kwh_raw = analysis_results.get('annual_pv_production_kwh')
+    produktion_yr1_kwh = float(produktion_yr1_kwh_raw if isinstance(produktion_yr1_kwh_raw, (int,float)) and produktion_yr1_kwh_raw > 0 else 1.0)
+    anteil_eigenverbrauch_yr1=eigenverbrauch_yr1_kwh/produktion_yr1_kwh; anteil_einspeisung_yr1=einspeisung_yr1_kwh/produktion_yr1_kwh
+    eigen_sim_kwh=[prod*anteil_eigenverbrauch_yr1 for prod in annual_prod_sim]; einspeisung_sim_kwh=[prod*anteil_einspeisung_yr1 for prod in annual_prod_sim]
+    fig=go.Figure()
+    bar_width_yz=0.4; color_ev = viz_settings.get("primary_chart_color", "blue"); color_feedin = viz_settings.get("secondary_chart_color", "orange")
+    for i,year_label in enumerate(jahre_sim_labels):
+        fig.add_trace(go.Scatter3d(x=[year_label,year_label],y=[0,0],z=[0,eigen_sim_kwh[i]],mode='lines',line=dict(width=15,color=color_ev),name='Eigenverbrauch (kWh)' if i==0 else None,legendgroup='Eigenverbrauch',showlegend=(i==0),hoverinfo="x+z"))
+        fig.add_trace(go.Scatter3d(x=[year_label,year_label],y=[bar_width_yz*1.5,bar_width_yz*1.5],z=[0,einspeisung_sim_kwh[i]],mode='lines',line=dict(width=15,color=color_feedin),name='Einspeisung (kWh)' if i==0 else None,legendgroup='Einspeisung',showlegend=(i==0),hoverinfo="x+z"))
+    fig.update_layout(title=get_text(texts,"viz_selfuse_stack_title_switcher","Jährlicher Eigenverbrauch vs. Einspeisung (Simuliert)"),scene=dict(xaxis_title='Simulationsjahr',yaxis_title='Kategorie',yaxis=dict(tickvals=[0,bar_width_yz*1.5],ticktext=['Eigenverbrauch','Einspeisung'],range=[-0.5,bar_width_yz*1.5+0.5]),zaxis_title='Energie (kWh)'),margin=dict(l=0,r=0,b=0,t=60),legend=dict(yanchor="top",y=0.99,xanchor="left",x=0.01))
+    _apply_custom_style_to_fig(fig,viz_settings,"selfuse_stack_switcher")
+    st.plotly_chart(fig,use_container_width=True,key="analysis_selfuse_stack_switcher_key_v6_final")
+    analysis_results['selfuse_stack_switcher_chart_bytes']=_export_plotly_fig_to_bytes(fig,texts)
+
+def render_cost_growth_switcher(analysis_results: Dict[str, Any], texts: Dict[str, str], viz_settings: Dict[str, Any]):
+    st.subheader(get_text(texts, "viz_cost_growth_subheader_switcher", "📈 Stromkostensteigerung – 3D Fläche"))
+    years_effective=int(analysis_results.get('simulation_period_years_effective',0))
+    if years_effective<=0: st.info(get_text(texts,"viz_data_insufficient_cost_growth","Simulationsdauer 0.")); analysis_results['cost_growth_switcher_chart_bytes']=None; return
+    jahre_axis=np.arange(1,years_effective+1)
+    basispreis_kwh=float(analysis_results.get('aktueller_strompreis_fuer_hochrechnung_euro_kwh',0.30))
+    current_increase_rate_percent=float(analysis_results.get('electricity_price_increase_rate_effective_percent',3.0))
+    szenarien_prozent_vals=sorted(list(set(round(s,1) for s in [max(0,current_increase_rate_percent-1.5),current_increase_rate_percent,current_increase_rate_percent+1.5])))
+    fig=go.Figure(); z_surface=[]
+    color_sequence = viz_settings.get("colorway", px.colors.qualitative.Plotly)
+    if not color_sequence or len(color_sequence) < len(szenarien_prozent_vals) : color_sequence = px.colors.qualitative.Plotly
+    for idx_s, s_percent in enumerate(szenarien_prozent_vals):
+        s_rate=s_percent/100.0; kosten_kwh_pro_jahr=[basispreis_kwh*((1+s_rate)**(jahr-1)) for jahr in jahre_axis]
+        z_surface.append(kosten_kwh_pro_jahr)
+        fig.add_trace(go.Scatter3d(x=jahre_axis,y=[s_percent]*len(jahre_axis),z=kosten_kwh_pro_jahr,mode='lines',name=f"{s_percent:.1f}% p.a.",line=dict(width=4, color=color_sequence[idx_s % len(color_sequence)])))
+    if len(szenarien_prozent_vals)>1 and len(jahre_axis)>1:
+        try:
+            surface_palette = viz_settings.get("default_color_palette", "Blues")
+            valid_continuous_scales = ['Blues','Greens','Viridis','Plotly3','Solar','Hot', 'Cividis']
+            surface_colorscale = surface_palette if surface_palette in valid_continuous_scales else "Blues"
+            fig.add_trace(go.Surface(x=jahre_axis,y=szenarien_prozent_vals,z=np.array(z_surface),colorscale=surface_colorscale,opacity=0.7,showscale=False,name='Kostenfläche'))
+        except Exception as e_surface: st.warning(f"Oberfläche Kostenwachstum: {e_surface}")
+    fig.update_layout(title=get_text(texts,"viz_cost_growth_title_switcher","Entwicklung Strompreis pro kWh (Szenarien)"),scene=dict(xaxis_title='Simulationsjahr',yaxis_title='Jährliche Steigerung (%)',zaxis_title='Strompreis (€/kWh)',yaxis=dict(tickvals=szenarien_prozent_vals,ticktext=[f"{s:.1f}%" for s in szenarien_prozent_vals])),margin=dict(l=0,r=0,b=0,t=60))
+    _apply_custom_style_to_fig(fig,viz_settings,"cost_growth_switcher")
+    st.plotly_chart(fig,use_container_width=True,key="analysis_cost_growth_switcher_key_v6_final")
+    analysis_results['cost_growth_switcher_chart_bytes']=_export_plotly_fig_to_bytes(fig,texts)
 
 def render_selfuse_ratio_switcher(analysis_results: Dict[str, Any], texts: Dict[str, str], viz_settings: Dict[str, Any]):
     st.subheader(get_text(texts, "viz_selfuse_ratio_subheader_switcher", "🎯 Eigenverbrauchsgrad – Monatliche Bubble View (Jahr 1)"))
@@ -804,6 +994,7 @@ def _create_electricity_cost_projection_chart(analysis_results_local: Dict, text
     fig.update_yaxes(rangemode="tozero")
     _apply_custom_style_to_fig(fig,viz_settings,"cost_projection_chart", dynamic_colors=dynamic_color_list)
     return fig
+
 def _create_cumulative_cashflow_chart(analysis_results_local: Dict, texts_local: Dict, viz_settings: Dict[str, Any], chart_key_prefix:str) -> Optional[go.Figure]:
     cumulative_cf_raw=analysis_results_local.get('cumulative_cash_flows_sim',[])
     if not (cumulative_cf_raw and isinstance(cumulative_cf_raw, list)):
@@ -840,25 +1031,22 @@ def _create_cumulative_cashflow_chart(analysis_results_local: Dict, texts_local:
     fig.add_hline(y=0,line_dash="dash",line_color="red")
     fig.update_yaxes(rangemode="normal")
     _apply_custom_style_to_fig(fig,viz_settings,"cumulative_cashflow_chart", dynamic_colors=dynamic_color_list)
-    fig.add_hline(y=0, line_dash="dash", line_color="red") # Korrekter Methodenaufruf
-    fig.update_yaxes(rangemode="normal")
-    _apply_custom_style_to_fig(fig, viz_settings, "cumulative_cashflow_chart", dynamic_colors=dynamic_color_list)
     return fig
 
 def _render_consumption_coverage_pie(analysis_results_local: Dict, texts_local: Dict, viz_settings: Dict[str, Any], chart_key_prefix: str) -> None:
     st.subheader(get_text(texts_local, "self_consumption_grid_header", "Eigenverbrauch & Netzbezug (Jahr 1)"))
-    _add_chart_controls(chart_key_prefix, texts_local, "pie", ["pie"], viz_settings) # Typ ist fest "pie"
+    _add_chart_controls(chart_key_prefix, texts_local, "pie", ["pie"], viz_settings)
 
     total_cons_raw=analysis_results_local.get('total_consumption_kwh_yr')
     self_supply_val_raw=analysis_results_local.get('self_supply_rate_percent')
     if total_cons_raw is None or self_supply_val_raw is None:
         st.info(get_text(texts_local,"no_data_for_consumption_pie_chart","Daten für Verbrauchsdeckungsdiagramm nicht verfügbar."))
-        analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = None # Sicherstellen, dass der Bytes-Key existiert
+        analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = None
         return
 
     total_cons=float(total_cons_raw) if isinstance(total_cons_raw,(int,float)) and total_cons_raw > 0 and not math.isnan(total_cons_raw) and not math.isinf(total_cons_raw) else 0.0
     self_supply_float=float(self_supply_val_raw) if isinstance(self_supply_val_raw,(int,float)) and not math.isnan(self_supply_val_raw) and not math.isinf(self_supply_val_raw) else 0.0
-    grid_cons_float=max(0.0, 100.0 - self_supply_float) # Sicherstellen, dass es nicht negativ wird
+    grid_cons_float=max(0.0, 100.0 - self_supply_float)
 
     is_manual_color = st.session_state.get(f"color_method_is_manual_{chart_key_prefix}", False)
     dynamic_color_list = None
@@ -878,7 +1066,6 @@ def _render_consumption_coverage_pie(analysis_results_local: Dict, texts_local: 
         default_color_2 = viz_settings.get("consumption_coverage_chart", {}).get("color_grid_draw", viz_settings.get("secondary_chart_color","red"))
         dynamic_color_list = [default_color_1, default_color_2]
 
-
     if total_cons > 0:
         df_pie_data = {
             'Kategorie': [
@@ -888,14 +1075,14 @@ def _render_consumption_coverage_pie(analysis_results_local: Dict, texts_local: 
             'Anteil (%)': [self_supply_float, grid_cons_float]
         }
         df_pie=pd.DataFrame(df_pie_data)
-        df_pie=df_pie[df_pie['Anteil (%)'] >= 0.01] # Sehr kleine Anteile ausblenden
+        df_pie=df_pie[df_pie['Anteil (%)'] >= 0.01]
 
         if not df_pie.empty:
             fig=px.pie(df_pie,values='Anteil (%)',names='Kategorie',
                        title=get_text(texts_local,"pie_chart_consumption_coverage_title","Deckung Gesamtverbrauch"),
                        hole=0.3,color_discrete_sequence=dynamic_color_list)
-            _apply_custom_style_to_fig(fig,viz_settings,"consumption_coverage_chart") # Allgemeine Styles zuerst
-            st.plotly_chart(fig,use_container_width=True,key=f"{chart_key_prefix}_final_pie_chart_key_v7_corrected") # Eindeutiger Key
+            _apply_custom_style_to_fig(fig,viz_settings,"consumption_coverage_chart")
+            st.plotly_chart(fig,use_container_width=True,key=f"{chart_key_prefix}_final_pie_chart_key_v7_corrected")
             analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = _export_plotly_fig_to_bytes(fig,texts_local)
         else:
             st.info(get_text(texts_local,"no_data_for_consumption_pie_chart_filtered","Keine signifikanten Anteile für Verbrauchsdeckungsdiagramm."))
@@ -906,7 +1093,7 @@ def _render_consumption_coverage_pie(analysis_results_local: Dict, texts_local: 
 
 def _render_pv_usage_pie(analysis_results_local: Dict, texts_local: Dict, viz_settings: Dict[str, Any], chart_key_prefix: str) -> None:
     st.subheader(get_text(texts_local,"pv_usage_header","Nutzung des PV-Stroms (Jahr 1)"))
-    _add_chart_controls(chart_key_prefix, texts_local, "pie", ["pie"], viz_settings) # Typ ist fest "pie"
+    _add_chart_controls(chart_key_prefix, texts_local, "pie", ["pie"], viz_settings)
 
     direct_cons_prod_perc_raw=analysis_results_local.get('direktverbrauch_anteil_pv_produktion_pct')
     storage_cons_prod_perc_raw=analysis_results_local.get('speichernutzung_anteil_pv_produktion_pct')
@@ -914,7 +1101,7 @@ def _render_pv_usage_pie(analysis_results_local: Dict, texts_local: Dict, viz_se
 
     if direct_cons_prod_perc_raw is None or storage_cons_prod_perc_raw is None or annual_pv_prod_kwh_val_raw is None:
         st.info(get_text(texts_local,"no_data_for_pv_usage_pie_chart","Daten für PV-Nutzungsdiagramm nicht verfügbar."))
-        analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = None # Sicherstellen, dass der Bytes-Key existiert
+        analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = None
         return
 
     direct_cons_float=float(direct_cons_prod_perc_raw) if isinstance(direct_cons_prod_perc_raw,(int,float)) and not math.isnan(direct_cons_prod_perc_raw) and not math.isinf(direct_cons_prod_perc_raw) else 0.0
@@ -923,11 +1110,11 @@ def _render_pv_usage_pie(analysis_results_local: Dict, texts_local: Dict, viz_se
 
     is_manual_color = st.session_state.get(f"color_method_is_manual_{chart_key_prefix}", False)
     dynamic_color_list = None
-    if is_manual_color: # Hier könnten 3 Farben sinnvoll sein
+    if is_manual_color:
         c1 = st.session_state.get(f"{chart_key_prefix}_primary_color", viz_settings.get("primary_chart_color"))
         c2 = st.session_state.get(f"{chart_key_prefix}_secondary_color", viz_settings.get("secondary_chart_color"))
-        c3 = st.session_state.get(f"{chart_key_prefix}_tertiary_color", "#cccccc") # Eine dritte Farbe, anpassbar machen via viz_settings
-        dynamic_color_list = [color for color in [c1, c2, c3] if color] # Nur vorhandene Farben verwenden
+        c3 = st.session_state.get(f"{chart_key_prefix}_tertiary_color", "#cccccc")
+        dynamic_color_list = [color for color in [c1, c2, c3] if color]
     else:
         palette_name = st.session_state.get(f"{chart_key_prefix}_color_palette", viz_settings.get("default_color_palette"))
         if palette_name != "Plotly":
@@ -939,9 +1126,8 @@ def _render_pv_usage_pie(analysis_results_local: Dict, texts_local: Dict, viz_se
     if not dynamic_color_list or len(dynamic_color_list) < 3:
         default_color_direct = viz_settings.get("pv_usage_chart", {}).get("color_direct_use", viz_settings.get("primary_chart_color","blue"))
         default_color_storage = viz_settings.get("pv_usage_chart", {}).get("color_storage_use", viz_settings.get("secondary_chart_color","orange"))
-        default_color_feed_in = viz_settings.get("pv_usage_chart", {}).get("color_feed_in", "#dddddd") # Helleres Grau für Einspeisung
+        default_color_feed_in = viz_settings.get("pv_usage_chart", {}).get("color_feed_in", "#dddddd")
         dynamic_color_list = [default_color_direct, default_color_storage, default_color_feed_in]
-
 
     if annual_pv_prod_kwh_val > 0:
         feed_in_prod_perc=max(0.0,100.0 - direct_cons_float - storage_cons_float)
@@ -953,14 +1139,14 @@ def _render_pv_usage_pie(analysis_results_local: Dict, texts_local: Dict, viz_se
         pie_values_pv=[direct_cons_float,storage_cons_float,feed_in_prod_perc]
         df_pie_data = {'Nutzungsart': pie_labels_pv, 'Anteil an PV-Produktion (%)': pie_values_pv}
         df_pie_pv=pd.DataFrame(df_pie_data)
-        df_pie_pv=df_pie_pv[df_pie_pv['Anteil an PV-Produktion (%)'] >= 0.01] # Sehr kleine Anteile ausblenden
+        df_pie_pv=df_pie_pv[df_pie_pv['Anteil an PV-Produktion (%)'] >= 0.01]
 
         if not df_pie_pv.empty:
             fig=px.pie(df_pie_pv,values='Anteil an PV-Produktion (%)',names='Nutzungsart',
                        title=get_text(texts_local,"pie_chart_pv_usage_title","Aufteilung PV-Produktion"),
                        hole=0.3,color_discrete_sequence=dynamic_color_list)
-            _apply_custom_style_to_fig(fig,viz_settings,"pv_usage_chart") # Allgemeine Styles zuerst
-            st.plotly_chart(fig,use_container_width=True,key=f"{chart_key_prefix}_final_pie_chart_key_v7_corrected") # Eindeutiger Key
+            _apply_custom_style_to_fig(fig,viz_settings,"pv_usage_chart")
+            st.plotly_chart(fig,use_container_width=True,key=f"{chart_key_prefix}_final_pie_chart_key_v7_corrected")
             analysis_results_local[f'{chart_key_prefix}_chart_bytes'] = _export_plotly_fig_to_bytes(fig,texts_local)
         else:
             st.info(get_text(texts_local,"no_data_for_pv_usage_pie_chart_filtered","Keine signifikanten Anteile für PV-Nutzungsdiagramm."))
@@ -973,37 +1159,28 @@ def get_pricing_modifications_data():
     """
     Gibt die aktuellen Preisänderungsdaten und Berechnungen zurück.
     Diese Funktion kann von anderen Modulen (z.B. PDF-Generierung) verwendet werden.
-
-    Returns:
-        Dict mit allen Preisänderungsdaten und berechneten Werten
     """
     live_calc = st.session_state.get('live_pricing_calculations', {})
-
     discount_percent = st.session_state.get('pricing_modifications_discount_slider', 0.0)
     rebates_eur = st.session_state.get('pricing_modifications_rebates_slider', 0.0)
     surcharge_percent = st.session_state.get('pricing_modifications_surcharge_slider', 0.0)
     special_costs_eur = st.session_state.get('pricing_modifications_special_costs_slider', 0.0)
     miscellaneous_eur = st.session_state.get('pricing_modifications_miscellaneous_slider', 0.0)
-
     descriptions = {
         'discount': st.session_state.get('pricing_modifications_descriptions_discount_text', ''),
         'rebates': st.session_state.get('pricing_modifications_descriptions_rebates_text', ''),
         'surcharge': st.session_state.get('pricing_modifications_descriptions_surcharge_text', ''),
-        'special_costs': st.session_state.get('pricing_modifications_descriptions_special_costs_text_unique', ''), # KORREKTUR: Verweist auf den einzigartigen Key
+        'special_costs': st.session_state.get('pricing_modifications_descriptions_special_costs_text_unique', ''),
         'miscellaneous': st.session_state.get('pricing_modifications_descriptions_miscellaneous_text', ''),
         'special_agreements': st.session_state.get('pricing_modifications_special_agreements_text', '')
     }
-
     return {
         'values': {
-            'discount_percent': discount_percent,
-            'rebates_eur': rebates_eur,
-            'surcharge_percent': surcharge_percent,
-            'special_costs_eur': special_costs_eur,
+            'discount_percent': discount_percent, 'rebates_eur': rebates_eur,
+            'surcharge_percent': surcharge_percent, 'special_costs_eur': special_costs_eur,
             'miscellaneous_eur': miscellaneous_eur
         },
-        'descriptions': descriptions,
-        'calculations': live_calc,
+        'descriptions': descriptions, 'calculations': live_calc,
         'has_modifications': any([
             discount_percent > 0, rebates_eur > 0, surcharge_percent > 0,
             special_costs_eur > 0, miscellaneous_eur > 0,
@@ -1013,38 +1190,28 @@ def get_pricing_modifications_data():
 
 def render_pricing_modifications_ui():
     st.markdown("## Preisänderungen (Rabatte, Zuschläge, Sondervereinbarungen)")
-
     if 'pricing_modifications' not in st.session_state:
         st.session_state.pricing_modifications = {
             "discount": 0.0, "surcharge": 0.0, "special_agreements": "",
             "rebates": 0.0, "special_costs": 0.0, "miscellaneous": 0.0,
-            "descriptions": {
-                "discount": "", "surcharge": "", "rebates": "",
-                "special_costs": "", "miscellaneous": ""
-            }
+            "descriptions": {"discount": "", "surcharge": "", "rebates": "", "special_costs": "", "miscellaneous": ""}
         }
-
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.slider("Rabatt (%)", min_value=0.0, max_value=100.0, step=0.1, key="pricing_modifications_discount_slider", help="Prozentualer Rabatt auf den Gesamtpreis.")
+        st.slider("Rabatt (%)", 0.0, 100.0, key="pricing_modifications_discount_slider", step=0.1, help="Prozentualer Rabatt auf den Gesamtpreis.")
         st.text_area("Beschreibung für Rabatt", key="pricing_modifications_descriptions_discount_text", help="Beschreibung oder Details zum Rabatt.")
-
     with col2:
-        st.slider("Nachlässe (€)", min_value=0.0, max_value=10000.0, step=10.0, key="pricing_modifications_rebates_slider", help="Feste Nachlässe in Euro.")
+        st.slider("Nachlässe (€)", 0.0, 10000.0, key="pricing_modifications_rebates_slider", step=10.0, help="Feste Nachlässe in Euro.")
         st.text_area("Beschreibung für Nachlässe", key="pricing_modifications_descriptions_rebates_text", help="Beschreibung oder Details zu den Nachlässen.")
-
     with col3:
-        st.slider("Zuschlag (%)", min_value=0.0, max_value=100.0, step=0.1, key="pricing_modifications_surcharge_slider", help="Prozentualer Zuschlag auf den Gesamtpreis.")
+        st.slider("Zuschlag (%)", 0.0, 100.0, key="pricing_modifications_surcharge_slider", step=0.1, help="Prozentualer Zuschlag auf den Gesamtpreis.")
         st.text_area("Beschreibung für Zuschlag", key="pricing_modifications_descriptions_surcharge_text", help="Beschreibung oder Details zum Zuschlag.")
-
     with col4:
-        st.slider("Sonderkosten (€)", min_value=0.0, max_value=10000.0, step=10.0, key="pricing_modifications_special_costs_slider", help="Zusätzliche Sonderkosten in Euro.")
-        st.text_area("Beschreibung für Sonderkosten", key="pricing_modifications_descriptions_special_costs_text_unique", help="Beschreibung oder Details zu den Sonderkosten.")
-
-    st.slider("Sonstiges (€)", min_value=0.0, max_value=10000.0, step=10.0, key="pricing_modifications_miscellaneous_slider", help="Sonstige Kosten oder Abzüge in Euro.")
+        st.slider("Sonderkosten (€)", 0.0, 10000.0, key="pricing_modifications_special_costs_slider", step=10.0, help="Zusätzliche Sonderkosten in Euro.")
+        st.text_area("Beschreibung für Sonderkosten", key="pricing_modifications_descriptions_special_costs_text", help="Beschreibung oder Details zu den Sonderkosten.")
+    st.slider("Sonstiges (€)", 0.0, 10000.0, key="pricing_modifications_miscellaneous_slider", step=10.0, help="Sonstige Kosten oder Abzüge in Euro.")
     st.text_area("Beschreibung für Sonstiges", key="pricing_modifications_descriptions_miscellaneous_text", help="Beschreibung oder Details zu Sonstigem.")
     st.text_area("Sondervereinbarungen", key="pricing_modifications_special_agreements_text", help="Zusätzliche Informationen oder Vereinbarungen, die im Angebot berücksichtigt werden sollen.")
-
     st.markdown("### Live-Kosten-Vorschau")
     calc_results = st.session_state.get('calculation_results', {})
     base_cost = calc_results.get('base_matrix_price_netto', 0.0)
@@ -1096,21 +1263,6 @@ def render_analysis(texts: Dict[str, str], results: Optional[Dict[str, Any]] = N
 
     st.markdown("---")
     render_pricing_modifications_ui()
-
-    pricing_data = get_pricing_modifications_data()
-    if 'calculation_results' in st.session_state and pricing_data['has_modifications']:
-        calc_results = st.session_state['calculation_results'].copy()
-        live_calc = pricing_data['calculations']
-        if live_calc:
-            calc_results['adjusted_base_cost'] = live_calc.get('base_cost', 0.0)
-            calc_results['total_rabatte_nachlaesse'] = live_calc.get('total_rabatte_nachlaesse', 0.0)
-            calc_results['total_aufpreise_zuschlaege'] = live_calc.get('total_aufpreise_zuschlaege', 0.0)
-            calc_results['adjusted_final_price'] = live_calc.get('final_price', 0.0)
-            calc_results['pricing_modifications'] = pricing_data
-            vat_rate = calc_results.get('vat_rate_percent', 19.0)
-            calc_results['total_investment_netto_adjusted'] = live_calc.get('final_price', 0.0)
-            calc_results['total_investment_brutto_adjusted'] = live_calc.get('final_price', 0.0) * (1 + vat_rate / 100.0)
-            st.session_state['calculation_results'] = calc_results
     st.markdown("---")
 
     if not project_inputs:
@@ -1145,21 +1297,21 @@ def render_analysis(texts: Dict[str, str], results: Optional[Dict[str, Any]] = N
     _add_chart_controls("monthly_compare", texts, default_type="bar", supported_types=["bar", "line", "area"], viz_settings=viz_settings)
     fig_monthly_comp = _create_monthly_production_consumption_chart(results_for_display, texts, viz_settings, "monthly_compare")
     if fig_monthly_comp:
-        st.plotly_chart(fig_monthly_comp, use_container_width=True, key="analysis_monthly_comp_chart_final_v8_corrected") # Key geändert
+        st.plotly_chart(fig_monthly_comp, use_container_width=True, key="analysis_monthly_comp_chart_final_v8_corrected")
         results_for_display['monthly_prod_cons_chart_bytes'] = _export_plotly_fig_to_bytes(fig_monthly_comp, texts)
     else: st.info(get_text(texts, "no_data_for_monthly_comparison_chart_v3", "Daten für Monatsvergleich (Prod/Verbr) unvollständig."))
 
     _add_chart_controls("cost_projection", texts, default_type="line", supported_types=["line", "bar"], viz_settings=viz_settings)
     fig_cost_projection = _create_electricity_cost_projection_chart(results_for_display, texts, viz_settings, "cost_projection")
     if fig_cost_projection:
-        st.plotly_chart(fig_cost_projection, use_container_width=True, key="analysis_cost_proj_chart_final_v8_corrected") # Key geändert
+        st.plotly_chart(fig_cost_projection, use_container_width=True, key="analysis_cost_proj_chart_final_v8_corrected")
         results_for_display['cost_projection_chart_bytes'] = _export_plotly_fig_to_bytes(fig_cost_projection, texts)
     else: st.info(get_text(texts, "no_data_for_cost_projection_chart_v3", "Daten für Kostenhochrechnung unvollständig."))
 
     _add_chart_controls("cum_cashflow", texts, default_type="area", supported_types=["area", "line", "bar"], viz_settings=viz_settings)
     fig_cum_cf = _create_cumulative_cashflow_chart(results_for_display, texts, viz_settings, "cum_cashflow")
     if fig_cum_cf:
-        st.plotly_chart(fig_cum_cf, use_container_width=True, key="analysis_cum_cashflow_chart_final_v8_corrected") # Key geändert
+        st.plotly_chart(fig_cum_cf, use_container_width=True, key="analysis_cum_cashflow_chart_final_v8_corrected")
         results_for_display['cumulative_cashflow_chart_bytes'] = _export_plotly_fig_to_bytes(fig_cum_cf, texts)
     else: st.info(get_text(texts, "no_data_for_cumulative_cashflow_chart_v3", "Daten für kum. Cashflow unvollständig."))
     st.markdown("---")
@@ -1236,14 +1388,290 @@ def render_analysis(texts: Dict[str, str], results: Optional[Dict[str, Any]] = N
                         formatted_df_sim_table[col_sim_fmt_display_name] = formatted_df_sim_table[col_sim_fmt_display_name].apply(
                             lambda x: format_kpi_value(x, unit=unit_in_table, precision=precision_in_table, texts_dict=texts) if pd.notnull(x) else get_text(texts, "not_applicable_short", "k.A.")
                         )
-                st.dataframe(formatted_df_sim_table.set_index('Jahr'), use_container_width=True, height=min(350, (sim_years_eff_econ_table + 1) * 35 + 3), key="analysis_simulation_details_dataframe_v8_corrected") # Key geändert
+                st.dataframe(formatted_df_sim_table.set_index('Jahr'), use_container_width=True, height=min(350, (sim_years_eff_econ_table + 1) * 35 + 3), key="analysis_simulation_details_dataframe_v8_corrected")
             else: st.info(get_text(texts, "simulation_details_no_data_after_df", "Simulationsdetails-DataFrame ist leer."))
         except Exception as e_df_sim: st.error(f"Fehler bei Erstellung/Formatierung der Simulationstabelle: {e_df_sim}")
-    else: st.info(get_text(texts, "simulation_details_no_data", "Simulationsdetails nicht verfügbar (Simulationsdauer 0 oder Daten fehlen)."))
-    st.markdown("---")
+    else:
+        st.info(get_text(texts, "simulation_details_no_data", "Simulationsdetails nicht verfügbar (Simulationsdauer 0 oder Daten fehlen)."))
+        st.markdown("---")
+    # ═══════════════════════════════════════════════════════════════
+    # 💰 FINANZIERUNGSANALYSE - Integration der Financial Tools
+    # ═══════════════════════════════════════════════════════════════
+    render_financing_analysis(results_for_display, texts, viz_settings)
 
     if 'st' in globals() and hasattr(st, 'session_state') and 'results_for_display' in locals():
         st.session_state["calculation_results"] = results_for_display.copy()
+
+def render_financing_analysis(results: Dict[str, Any], texts: Dict[str, str], viz_settings: Dict[str, Any]):
+    """
+    Rendert eine umfassende Finanzierungsanalyse mit verschiedenen Finanzierungsoptionen.
+    """
+    st.subheader("💰 Finanzierungsanalyse")
+    
+    # Prüfen ob Finanzierung gewünscht ist
+    financing_requested = False
+    if 'st' in globals() and hasattr(st, 'session_state'):
+        project_data = st.session_state.get('project_data', {})
+        customer_data = project_data.get('customer_data', {})
+        financing_requested = customer_data.get('financing_requested', False)
+    
+    if not financing_requested:
+        st.info("💡 Aktivieren Sie 'Finanzierung gewünscht' in der Dateneingabe für eine detaillierte Finanzierungsanalyse.")
+        return
+    
+    # Investitionssumme aus den Berechnungsergebnissen
+    total_investment = results.get('total_investment_netto', 25000.0)
+    
+    # Finanzierungsparameter aus Session State
+    customer_data = st.session_state.get('project_data', {}).get('customer_data', {})
+    financing_type = customer_data.get('financing_type', 'Bankkredit (Annuität)')
+    
+    st.markdown(f"**Gesamtinvestition:** {total_investment:,.2f} € (netto)")
+    st.markdown(f"**Gewählte Finanzierungsart:** {financing_type}")
+    
+    # Interaktive Finanzierungsparameter
+    with st.expander("🔧 **Finanzierungsparameter anpassen**", expanded=True):
+        col_param1, col_param2, col_param3 = st.columns(3)
+        
+        with col_param1:
+            financing_amount = st.number_input(
+                "Finanzierungsbetrag (€)",
+                min_value=1000.0,
+                max_value=total_investment,
+                value=customer_data.get('desired_financing_amount', total_investment * 0.8),
+                step=500.0,
+                key='financing_amount_analysis'
+            )
+            
+        with col_param2:
+            if financing_type == "Bankkredit (Annuität)":
+                interest_rate = st.slider(
+                    "Zinssatz (% p.a.)",
+                    min_value=1.0,
+                    max_value=12.0,
+                    value=customer_data.get('interest_rate_percent', 4.5),
+                    step=0.1,
+                    key='interest_rate_analysis'
+                )
+            else:
+                leasing_factor = st.slider(
+                    "Leasingfaktor (% pro Monat)",
+                    min_value=0.5,
+                    max_value=3.0,
+                    value=customer_data.get('leasing_factor_percent', 1.2),
+                    step=0.1,
+                    key='leasing_factor_analysis'
+                )
+                
+        with col_param3:
+            if financing_type == "Bankkredit (Annuität)":
+                loan_term = st.slider(
+                    "Laufzeit (Jahre)",
+                    min_value=5,
+                    max_value=25,
+                    value=customer_data.get('loan_term_years', 15),
+                    key='loan_term_analysis'
+                )
+            else:
+                leasing_term = st.slider(
+                    "Leasinglaufzeit (Monate)",
+                    min_value=24,
+                    max_value=180,
+                    value=customer_data.get('leasing_term_months', 120),
+                    step=12,
+                    key='leasing_term_analysis'
+                )
+    
+    # Finanzierungsberechnungen durchführen
+    if financing_type == "Bankkredit (Annuität)":
+        loan_result = calculate_annuity(financing_amount, interest_rate, loan_term)
+        
+        if "error" not in loan_result:
+            col_result1, col_result2, col_result3 = st.columns(3)
+            
+            with col_result1:
+                st.metric(
+                    "Monatliche Rate",
+                    f"{loan_result['monatliche_rate']:,.2f} €"
+                )
+                
+            with col_result2:
+                st.metric(
+                    "Gesamtzinsen",
+                    f"{loan_result['gesamtzinsen']:,.2f} €"
+                )
+                
+            with col_result3:
+                st.metric(
+                    "Gesamtkosten",
+                    f"{loan_result['gesamtkosten']:,.2f} €"
+                )
+            
+            # Tilgungsplan anzeigen
+            if st.checkbox("📊 Tilgungsplan anzeigen", key='show_amortization_schedule'):
+                tilgungsplan_df = pd.DataFrame(loan_result['tilgungsplan'])
+                st.dataframe(
+                    tilgungsplan_df.head(24),  # Erste 2 Jahre anzeigen
+                    use_container_width=True,
+                    key='tilgungsplan_dataframe'
+                )
+                
+                # Tilgungsplan-Visualisierung
+                fig_tilgung = go.Figure()
+                fig_tilgung.add_trace(go.Scatter(
+                    x=tilgungsplan_df['monat'],
+                    y=tilgungsplan_df['zinsen'],
+                    mode='lines',
+                    name='Zinsen',
+                    fill='tozeroy'
+                ))
+                fig_tilgung.add_trace(go.Scatter(
+                    x=tilgungsplan_df['monat'],
+                    y=tilgungsplan_df['tilgung'],
+                    mode='lines',
+                    name='Tilgung',
+                    fill='tonexty'
+                ))
+                fig_tilgung.update_layout(
+                    title="Tilgungsplan-Visualisierung",
+                    xaxis_title="Monat",
+                    yaxis_title="Betrag (€)",
+                    hovermode='x unified'
+                )
+                st.plotly_chart(fig_tilgung, use_container_width=True, key='tilgungsplan_chart')
+    
+    elif financing_type == "Leasing":
+        leasing_result = calculate_leasing_costs(financing_amount, leasing_factor, leasing_term)
+        
+        if "error" not in leasing_result:
+            col_result1, col_result2, col_result3 = st.columns(3)
+            
+            with col_result1:
+                st.metric(
+                    "Monatliche Leasingrate",
+                    f"{leasing_result['monatliche_rate']:,.2f} €"
+                )
+                
+            with col_result2:
+                st.metric(
+                    "Gesamtleasingkosten",
+                    f"{leasing_result['gesamtkosten']:,.2f} €"
+                )
+                
+            with col_result3:
+                st.metric(
+                    "Effektive Kosten",
+                    f"{leasing_result['effektive_kosten']:,.2f} €"
+                )
+    
+    # Finanzierungsvergleich
+    st.markdown("---")
+    st.subheader("📊 Finanzierungsvergleich")
+    
+    comparison_result = calculate_financing_comparison(
+        financing_amount,
+        interest_rate if financing_type == "Bankkredit (Annuität)" else 4.5,
+        loan_term if financing_type == "Bankkredit (Annuität)" else 15,
+        leasing_factor if financing_type == "Leasing" else 1.2
+    )
+    
+    if comparison_result:
+        col_comp1, col_comp2, col_comp3 = st.columns(3)
+        
+        with col_comp1:
+            st.markdown("**💳 Kreditfinanzierung**")
+            if "error" not in comparison_result.get("kredit", {}):
+                credit = comparison_result["kredit"]
+                st.metric("Monatliche Rate", f"{credit.get('monatliche_rate', 0):,.2f} €")
+                st.metric("Gesamtkosten", f"{credit.get('gesamtkosten', 0):,.2f} €")
+        
+        with col_comp2:
+            st.markdown("**🚗 Leasing**")
+            if "error" not in comparison_result.get("leasing", {}):
+                leasing = comparison_result["leasing"]
+                st.metric("Monatliche Rate", f"{leasing.get('monatliche_rate', 0):,.2f} €")
+                st.metric("Effektive Kosten", f"{leasing.get('effektive_kosten', 0):,.2f} €")
+        
+        with col_comp3:
+            st.markdown("**💰 Barkauf**")
+            cash = comparison_result.get("cash_kauf", {})
+            st.metric("Investition", f"{cash.get('investition', 0):,.2f} €")
+            st.metric("Opportunitätskosten", f"{cash.get('opportunitaetskosten', 0):,.2f} €")
+        
+        # Empfehlung anzeigen
+        recommendation = comparison_result.get("empfehlung", "Keine Empfehlung verfügbar")
+        st.info(f"💡 **{recommendation}**")
+    
+    # Steuerliche Aspekte
+    st.markdown("---")
+    st.subheader("🏛️ Steuerliche Aspekte")
+    
+    # Abschreibung berechnen
+    depreciation_result = calculate_depreciation(total_investment, 20, "linear")
+    
+    if "error" not in depreciation_result:
+        col_tax1, col_tax2 = st.columns(2)
+        
+        with col_tax1:
+            st.metric(
+                "Jährliche Abschreibung",
+                f"{depreciation_result['jaehrliche_abschreibung']:,.2f} €"
+            )
+            
+        with col_tax2:
+            st.metric(
+                "Steuerersparnis (30%)",
+                f"{depreciation_result['steuerersparnis_30_prozent']:,.2f} €"
+            )
+    
+    # PV-Ertrag und Steueroptimierung
+    annual_pv_revenue = results.get('annual_revenue_feed_in_eur', 0) + results.get('annual_savings_consumption_eur', 0)
+    if annual_pv_revenue > 0:
+        tax_result = calculate_capital_gains_tax(annual_pv_revenue, 26.375)
+        
+        col_tax3, col_tax4 = st.columns(2)
+        with col_tax3:
+            st.metric(
+                "Jährlicher PV-Ertrag",
+                f"{annual_pv_revenue:,.2f} €"
+            )
+        with col_tax4:
+            st.metric(
+                "Steuer (KESt 26,375%)",
+                f"{tax_result['steuer']:,.2f} €"
+            )
+    
+    # Wirtschaftlichkeitsvergleich mit/ohne Finanzierung
+    st.markdown("---")
+    st.subheader("📈 Rentabilitätsvergleich")
+    
+    # Hier könnten weitere Berechnungen zur Wirtschaftlichkeit eingefügt werden
+    cash_flow_20_years = results.get('cumulative_cash_flows_sim', [0] * 21)
+    if len(cash_flow_20_years) > 20:
+        final_cash_flow = cash_flow_20_years[20]
+        
+        col_profit1, col_profit2 = st.columns(2)
+        with col_profit1:
+            st.metric(
+                "Gewinn nach 20 Jahren (Barkauf)",
+                f"{final_cash_flow:,.2f} €",
+                delta=None
+            )
+        
+        # Vereinfachte Finanzierungsrendite
+        if financing_type == "Bankkredit (Annuität)" and "error" not in loan_result:
+            total_financing_cost = loan_result.get('gesamtkosten', 0)
+            equity_used = total_investment - financing_amount
+            financing_profit = final_cash_flow - (total_financing_cost - financing_amount) - equity_used
+            
+            with col_profit2:
+                st.metric(
+                    f"Gewinn nach 20 Jahren ({financing_type})",
+                    f"{financing_profit:,.2f} €",
+                    delta=f"{financing_profit - final_cash_flow:,.2f} €"
+                )
+
+    st.markdown("---")
 
 pv_visuals_module = None
 try:
@@ -1254,8 +1682,3 @@ except ImportError:
 
 # Änderungshistorie
 # ... (vorherige Einträge)
-# 2025-06-02, Gemini Ultra: Syntaxfehler (fehlende Einrückung nach try) korrigiert.
-#                           Alle 15 render_*_switcher Funktionen wurden aus der Ursprungsversion eingefügt und sichergestellt, dass sie die viz_settings korrekt verwenden und ihre Bytes für den PDF-Export speichern.
-#                           Die Funktionen für 2D-Standarddiagramme wurden überarbeitet, um den Diagramm-Typ-Switcher und die Farbanpassung zu integrieren.
-#                           Keys für st.plotly_chart und andere Widgets systematisch überarbeitet für Eindeutigkeit.
-#                           Integration der Live-Preisberechnungen in die Haupt-Berechnungsergebnisse.

@@ -452,6 +452,330 @@ def render_data_input(texts: Dict[str, str]) -> None:
         create_component_selector("notstrom_model_label",NOTSTROM_LIST_MODELS,"selected_notstrom_name","selected_notstrom_id", "not_v6_exp_stable")
         create_component_selector("tierabwehr_model_label",TIERABWEHR_LIST_MODELS,"selected_tierabwehr_name","selected_tierabwehr_id", "ta_v6_exp_stable")
 
+    # ═══════════════════════════════════════════════════════════════
+    # 💰 FINANZIERUNG - Vollständige Bank-Finanzierungsfelder
+    # ═══════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.subheader("💰 Finanzierungsoptionen")
+    
+    # Finanzierung aktivieren Checkbox
+    inputs['customer_data']['financing_requested'] = st.checkbox(
+        "Finanzierung / Leasing gewünscht", 
+        value=inputs['customer_data'].get('financing_requested', False),
+        key='financing_requested_checkbox',
+        help="Aktivieren Sie diese Option für eine vollständige Finanzierungsanalyse"
+    )
+    
+    if inputs['customer_data']['financing_requested']:
+        
+        # Finanzierungsart wählen
+        financing_type = st.radio(
+            "Art der Finanzierung",
+            options=["Bankkredit (Annuität)", "Leasing", "Contracting"],
+            index=0,
+            key='financing_type_radio',
+            horizontal=True
+        )
+        inputs['customer_data']['financing_type'] = financing_type
+        
+        with st.expander("📋 **Persönliche Daten (Hauptantragsteller)**", expanded=True):
+            col_birth, col_nationality = st.columns(2)
+            with col_birth:
+                inputs['customer_data']['birth_date'] = st.date_input(
+                    "Geburtsdatum *",
+                    value=inputs['customer_data'].get('birth_date', datetime(1980, 1, 1).date()),
+                    key='birth_date_financing'
+                )
+            with col_nationality:
+                inputs['customer_data']['nationality'] = st.text_input(
+                    "Staatsangehörigkeit *",
+                    value=inputs['customer_data'].get('nationality', 'Deutsch'),
+                    key='nationality_financing'
+                )
+                
+            col_resident_since, col_marital = st.columns(2)
+            with col_resident_since:
+                inputs['customer_data']['resident_since'] = st.date_input(
+                    "Wohnhaft an aktueller Adresse seit",
+                    value=inputs['customer_data'].get('resident_since', datetime(2020, 1, 1).date()),
+                    key='resident_since_financing'
+                )
+            with col_marital:
+                marital_options = ['Ledig', 'Verheiratet/Verpartnert', 'Geschieden', 'Verwitwet']
+                inputs['customer_data']['marital_status'] = st.selectbox(
+                    "Familienstand *",
+                    options=marital_options,
+                    index=marital_options.index(inputs['customer_data'].get('marital_status', 'Ledig')),
+                    key='marital_status_financing'
+                )
+                
+            if inputs['customer_data']['marital_status'] in ['Verheiratet/Verpartnert']:
+                inputs['customer_data']['property_regime'] = st.selectbox(
+                    "Güterstand",
+                    options=['Zugewinngemeinschaft', 'Gütergemeinschaft', 'Gütertrennung'],
+                    index=0,
+                    key='property_regime_financing'
+                )
+                
+            inputs['customer_data']['dependent_children'] = st.number_input(
+                "Anzahl unterhaltspflichtiger Kinder",
+                min_value=0,
+                max_value=10,
+                value=inputs['customer_data'].get('dependent_children', 0),
+                key='dependent_children_financing'
+            )
+
+        with st.expander("💼 **Berufs- & Einkommenssituation**", expanded=True):
+            col_status, col_profession = st.columns(2)
+            with col_status:
+                professional_status_options = [
+                    'Angestellter', 'Beamter', 'Selbstständig/Freiberufler', 
+                    'Arbeiter', 'Rentner/Pensionär', 'Sonstiges'
+                ]
+                inputs['customer_data']['professional_status'] = st.selectbox(
+                    "Beruflicher Status *",
+                    options=professional_status_options,
+                    index=0,
+                    key='professional_status_financing'
+                )
+            with col_profession:
+                inputs['customer_data']['profession'] = st.text_input(
+                    "Ausgeübter Beruf *",
+                    value=inputs['customer_data'].get('profession', ''),
+                    key='profession_financing'
+                )
+                
+            col_employer, col_sector = st.columns(2)
+            with col_employer:
+                inputs['customer_data']['employer_name'] = st.text_input(
+                    "Arbeitgeber (Name)",
+                    value=inputs['customer_data'].get('employer_name', ''),
+                    key='employer_name_financing'
+                )
+            with col_sector:
+                inputs['customer_data']['business_sector'] = st.text_input(
+                    "Branche",
+                    value=inputs['customer_data'].get('business_sector', ''),
+                    key='business_sector_financing'
+                )
+                
+            inputs['customer_data']['employer_address'] = st.text_area(
+                "Arbeitgeber Anschrift",
+                value=inputs['customer_data'].get('employer_address', ''),
+                key='employer_address_financing',
+                height=80
+            )
+            
+            col_employed_since, col_employment_type = st.columns(2)
+            with col_employed_since:
+                inputs['customer_data']['employed_since'] = st.date_input(
+                    "Beschäftigt seit (Monat/Jahr)",
+                    value=inputs['customer_data'].get('employed_since', datetime(2020, 1, 1).date()),
+                    key='employed_since_financing'
+                )
+            with col_employment_type:
+                employment_type_options = ['Unbefristet', 'Befristet']
+                inputs['customer_data']['employment_type'] = st.selectbox(
+                    "Arbeitsverhältnis",
+                    options=employment_type_options,
+                    index=0,
+                    key='employment_type_financing'
+                )
+                
+            if inputs['customer_data']['employment_type'] == 'Befristet':
+                inputs['customer_data']['employment_end_date'] = st.date_input(
+                    "Befristet bis",
+                    value=inputs['customer_data'].get('employment_end_date', datetime(2025, 12, 31).date()),
+                    key='employment_end_date_financing'
+                )
+                
+            col_net_income, col_other_income = st.columns(2)
+            with col_net_income:
+                inputs['customer_data']['monthly_net_income'] = st.number_input(
+                    "Monatliches Nettoeinkommen (€) *",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('monthly_net_income', 3000.0)),
+                    step=100.0,
+                    key='monthly_net_income_financing'
+                )
+            with col_other_income:
+                inputs['customer_data']['other_monthly_income'] = st.number_input(
+                    "Sonstige monatliche Einkünfte (€)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('other_monthly_income', 0.0)),
+                    step=50.0,
+                    key='other_monthly_income_financing'
+                )
+                
+            if inputs['customer_data']['other_monthly_income'] > 0:
+                inputs['customer_data']['other_income_description'] = st.text_input(
+                    "Beschreibung der sonstigen Einkünfte",
+                    value=inputs['customer_data'].get('other_income_description', ''),
+                    key='other_income_description_financing'
+                )
+
+        with st.expander("💸 **Monatliche Ausgaben**", expanded=True):
+            col_rent, col_health_insurance = st.columns(2)
+            with col_rent:
+                inputs['customer_data']['monthly_rent_costs'] = st.number_input(
+                    "Miete/Wohnkosten (€/Monat)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('monthly_rent_costs', 800.0)),
+                    step=50.0,
+                    key='monthly_rent_costs_financing'
+                )
+            with col_health_insurance:
+                inputs['customer_data']['private_health_insurance'] = st.number_input(
+                    "Private Krankenversicherung (€/Monat)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('private_health_insurance', 0.0)),
+                    step=25.0,
+                    key='private_health_insurance_financing'
+                )
+                
+            col_existing_loans, col_leasing = st.columns(2)
+            with col_existing_loans:
+                inputs['customer_data']['existing_loan_payments'] = st.number_input(
+                    "Bestehende Ratenkredite (€/Monat)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('existing_loan_payments', 0.0)),
+                    step=50.0,
+                    key='existing_loan_payments_financing'
+                )
+            with col_leasing:
+                inputs['customer_data']['existing_leasing_payments'] = st.number_input(
+                    "Leasingraten (€/Monat)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('existing_leasing_payments', 0.0)),
+                    step=50.0,
+                    key='existing_leasing_payments_financing'
+                )
+                
+            inputs['customer_data']['alimony_payments'] = st.number_input(
+                "Unterhaltsverpflichtungen (€/Monat)",
+                min_value=0.0,
+                value=float(inputs['customer_data'].get('alimony_payments', 0.0)),
+                step=50.0,
+                key='alimony_payments_financing'
+            )
+
+        with st.expander("🏗️ **Finanzierungsdetails zum PV-Vorhaben**", expanded=True):
+            # Gesamtkosten werden aus der Konfiguration übernommen - hier als Platzhalter
+            estimated_total_costs = 25000.0  # Wird später aus calculations übernommen
+            st.info(f"💡 Geschätzte Gesamtkosten der PV-Anlage: {estimated_total_costs:,.2f} €")
+            
+            col_financing_amount, col_equity = st.columns(2)
+            with col_financing_amount:
+                inputs['customer_data']['desired_financing_amount'] = st.number_input(
+                    "Gewünschter Finanzierungsbetrag (€) *",
+                    min_value=0.0,
+                    max_value=estimated_total_costs,
+                    value=float(inputs['customer_data'].get('desired_financing_amount', estimated_total_costs * 0.8)),
+                    step=500.0,
+                    key='desired_financing_amount_financing'
+                )
+            with col_equity:
+                inputs['customer_data']['equity_amount'] = st.number_input(
+                    "Höhe des Eigenkapitals (€)",
+                    min_value=0.0,
+                    value=float(inputs['customer_data'].get('equity_amount', estimated_total_costs * 0.2)),
+                    step=500.0,
+                    key='equity_amount_financing'
+                )
+                
+            if financing_type == "Bankkredit (Annuität)":
+                col_loan_term, col_interest_rate = st.columns(2)
+                with col_loan_term:
+                    inputs['customer_data']['loan_term_years'] = st.number_input(
+                        "Gewünschte Laufzeit (Jahre)",
+                        min_value=5,
+                        max_value=30,
+                        value=int(inputs['customer_data'].get('loan_term_years', 15)),
+                        key='loan_term_years_financing'
+                    )
+                with col_interest_rate:
+                    inputs['customer_data']['interest_rate_percent'] = st.number_input(
+                        "Zinssatz (% p.a.)",
+                        min_value=0.5,
+                        max_value=15.0,
+                        value=float(inputs['customer_data'].get('interest_rate_percent', 4.5)),
+                        step=0.1,
+                        key='interest_rate_percent_financing'
+                    )
+                    
+            elif financing_type == "Leasing":
+                col_leasing_term, col_leasing_factor = st.columns(2)
+                with col_leasing_term:
+                    inputs['customer_data']['leasing_term_months'] = st.number_input(
+                        "Leasinglaufzeit (Monate)",
+                        min_value=24,
+                        max_value=240,
+                        value=int(inputs['customer_data'].get('leasing_term_months', 120)),
+                        step=12,
+                        key='leasing_term_months_financing'
+                    )
+                with col_leasing_factor:
+                    inputs['customer_data']['leasing_factor_percent'] = st.number_input(
+                        "Leasingfaktor (% pro Monat)",
+                        min_value=0.5,
+                        max_value=5.0,
+                        value=float(inputs['customer_data'].get('leasing_factor_percent', 1.2)),
+                        step=0.1,
+                        key='leasing_factor_percent_financing'
+                    )
+
+        # Zweiter Antragsteller
+        inputs['customer_data']['has_co_applicant'] = st.checkbox(
+            "➕ Zweiten Antragsteller hinzufügen",
+            value=inputs['customer_data'].get('has_co_applicant', False),
+            key='has_co_applicant_checkbox'
+        )
+        
+        if inputs['customer_data']['has_co_applicant']:
+            with st.expander("👥 **Zweiter Antragsteller - Persönliche Daten**", expanded=False):
+                col_birth2, col_nationality2 = st.columns(2)
+                with col_birth2:
+                    inputs['customer_data']['co_birth_date'] = st.date_input(
+                        "Geburtsdatum *",
+                        value=inputs['customer_data'].get('co_birth_date', datetime(1980, 1, 1).date()),
+                        key='co_birth_date_financing'
+                    )
+                with col_nationality2:
+                    inputs['customer_data']['co_nationality'] = st.text_input(
+                        "Staatsangehörigkeit *",
+                        value=inputs['customer_data'].get('co_nationality', 'Deutsch'),
+                        key='co_nationality_financing'
+                    )
+                    
+                # Weitere Felder für zweiten Antragsteller analog zum ersten
+                inputs['customer_data']['co_profession'] = st.text_input(
+                    "Ausgeübter Beruf *",
+                    value=inputs['customer_data'].get('co_profession', ''),
+                    key='co_profession_financing'
+                )
+                
+                col_co_income, col_co_status = st.columns(2)
+                with col_co_income:
+                    inputs['customer_data']['co_monthly_net_income'] = st.number_input(
+                        "Monatliches Nettoeinkommen (€) *",
+                        min_value=0.0,
+                        value=float(inputs['customer_data'].get('co_monthly_net_income', 2500.0)),
+                        step=100.0,
+                        key='co_monthly_net_income_financing'
+                    )
+                with col_co_status:
+                    inputs['customer_data']['co_professional_status'] = st.selectbox(
+                        "Beruflicher Status *",
+                        options=professional_status_options,
+                        index=0,
+                        key='co_professional_status_financing'
+                    )
+
+        # Finanzierungsauswertung anzeigen
+        if st.button("💰 Finanzierung berechnen", key='calculate_financing_btn'):
+            # Hier wird später die financial_tools Integration erfolgen
+            st.success("✅ Finanzierungsberechnung wird im Analyse-Dashboard angezeigt!")
+
     st.subheader(get_text_di(texts,"economic_data_header","Wirtschaftliche Parameter"))
     if 'economic_data_expanded_di' not in st.session_state: st.session_state.economic_data_expanded_di = False
     with st.expander(get_text_di(texts,"economic_data_header","Wirtschaftliche Parameter"),expanded=st.session_state.economic_data_expanded_di):

@@ -7,7 +7,6 @@ Datum: 2025-06-03
 # pdf_generator.py
 
 from __future__ import annotations
-
 import base64
 import io
 import math
@@ -15,6 +14,7 @@ import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union, Callable
 import os
+from io import BytesIO
 
 _REPORTLAB_AVAILABLE = False
 _PYPDF_AVAILABLE = False
@@ -792,14 +792,40 @@ def generate_offer_pdf(
     db_list_company_documents_func: Callable[[int, Optional[str]], List[Dict[str, Any]]],
     active_company_id: Optional[int],
     texts: Dict[str, str],
-    use_modern_design: bool = True,    **kwargs
+    use_modern_design: bool = True,
+    **kwargs
 ) -> Optional[bytes]:
-
-    if not _REPORTLAB_AVAILABLE:
-        if project_data and texts and company_info:
-            return _create_plaintext_pdf_fallback(project_data, analysis_results, texts, company_info, selected_offer_title_text, selected_cover_letter_text)
-        return None
+    """
+    Erzeugt ein PDF-Angebot für Photovoltaik-Projekte.
     
+    Args:
+        project_data: Projektdaten mit Kunden- und Komponenteninformationen
+        analysis_results: Ergebnisse der Wirtschaftlichkeitsanalyse
+        company_info: Firmeninformationen
+        company_logo_base64: Base64-kodiertes Firmenlogo
+        selected_title_image_b64: Base64-kodiertes Titelbild
+        selected_offer_title_text: Titel des Angebots
+        selected_cover_letter_text: Anschreiben-Text
+        sections_to_include: Liste der einzuschließenden Sektionen
+        inclusion_options: Optionen für zusätzliche Inhalte
+        load_admin_setting_func: Funktion zum Laden von Admin-Einstellungen
+        save_admin_setting_func: Funktion zum Speichern von Admin-Einstellungen
+        list_products_func: Funktion zum Auflisten von Produkten
+        get_product_by_id_func: Funktion zum Abrufen von Produkten nach ID
+        db_list_company_documents_func: Funktion zum Abrufen von Firmendokumenten
+        active_company_id: ID der aktiven Firma
+        texts: Übersetzungstexte
+        use_modern_design: Ob modernes Design verwendet werden soll
+        **kwargs: Zusätzliche Parameter
+        
+    Returns:
+        PDF-Bytes oder None bei Fehlern
+    """
+    
+    if not _REPORTLAB_AVAILABLE:
+        print("⚠️ ReportLab nicht verfügbar - kann kein PDF erstellen")
+        return _create_no_data_fallback_pdf(texts, project_data.get('customer_data', {}) if project_data else {})
+   
     # DATENVALIDIERUNG: Prüfe Verfügbarkeit der erforderlichen Daten
     validation_result = _validate_pdf_data_availability(project_data or {}, analysis_results or {}, texts)
     
@@ -815,32 +841,575 @@ def generate_offer_pdf(
         for warning in validation_result['warnings']:
             print(f"   - {warning}")
     
-    design_settings = load_admin_setting_func('pdf_design_settings', {'primary_color': PRIMARY_COLOR_HEX, 'secondary_color': SECONDARY_COLOR_HEX})
-    if isinstance(design_settings, dict):
-        _update_styles_with_dynamic_colors(design_settings)
-    
-    main_offer_buffer = io.BytesIO()
-    offer_number_final = _get_next_offer_number(texts, load_admin_setting_func, save_admin_setting_func)
-    
-    include_company_logo_opt = inclusion_options.get("include_company_logo", True)
-    include_product_images_opt = inclusion_options.get("include_product_images", True)
-    include_all_documents_opt = inclusion_options.get("include_all_documents", False) # Korrigierter Key
-    company_document_ids_to_include_opt = inclusion_options.get("company_document_ids_to_include", [])
-    include_optional_component_details_opt = inclusion_options.get("include_optional_component_details", True) # NEUE Option
-    
-    # NEUE OPTIONEN für Footer und Header-Logo (wie gewünscht)
-    include_custom_footer_opt = inclusion_options.get("include_custom_footer", True)  
-    include_header_logo_opt = inclusion_options.get("include_header_logo", True)
+    try:
+        # Design-Einstellungen laden
+        design_settings = load_admin_setting_func('pdf_design_settings', {
+            'primary_color': PRIMARY_COLOR_HEX, 
+            'secondary_color': SECONDARY_COLOR_HEX
+        })
+        if isinstance(design_settings, dict):
+            _update_styles_with_dynamic_colors(design_settings)
+        
+        # PDF-Konfiguration
+        buffer = BytesIO()
+        offer_number = _get_next_offer_number(texts, load_admin_setting_func, save_admin_setting_func)
+        
+        # Angebotsnummer optional aus inclusion_options überschreiben
+        if inclusion_options.get('custom_offer_number'):
+            offer_number = inclusion_options['custom_offer_number']
+        
+        # PDF-Dokument erstellen
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=pagesizes.A4,
+            topMargin=2*cm, 
+            bottomMargin=2*cm, 
+            leftMargin=2*cm, 
+            rightMargin=2*cm
+        )
+        
+        # Story-Elemente sammeln
+        story = []
+        
+        # Deckblatt
+        story.extend(_create_cover_page(
+            project_data, company_info, company_logo_base64, 
+            selected_title_image_b64, selected_offer_title_text,
+            selected_cover_letter_text, offer_number, texts
+        ))
+        
+        # Seitenumbruch nach Deckblatt
+        story.append(PageBreak())
+        
+        # Inhaltssektionen
+        if sections_to_include:
+            if 'project_overview' in sections_to_include:
+                story.extend(_create_project_overview_section(project_data, texts))
+            
+            if 'components' in sections_to_include and project_data:
+                story.extend(_create_components_section(
+                    project_data, list_products_func, get_product_by_id_func, texts
+                ))
+            
+            if 'analysis' in sections_to_include and analysis_results:
+                story.extend(_create_analysis_section(analysis_results, texts))
+            
+            if 'costs' in sections_to_include and analysis_results:
+                story.extend(_create_costs_section(analysis_results, texts))
+            
+            if 'financing' in sections_to_include and analysis_results:
+                story.extend(_create_financing_section(analysis_results, texts))
+        
+        # Footer-Informationen
+        story.extend(_create_footer_section(company_info, texts))
+        
+        # PDF erstellen
+        doc.build(story)
+        main_pdf_bytes = buffer.getvalue()
+        buffer.close()
+        
+        # Anhänge hinzufügen, falls gewünscht
+        if inclusion_options.get('include_all_documents') and _PYPDF_AVAILABLE:
+            return _append_additional_documents(
+                main_pdf_bytes, inclusion_options, project_data,
+                get_product_by_id_func, db_list_company_documents_func,
+                active_company_id
+            )
+        
+        return main_pdf_bytes
+        
+    except Exception as e:
+        print(f"❌ Fehler bei PDF-Erstellung: {e}")
+        traceback.print_exc()
+        # Fallback-PDF erstellen
+        customer_data = project_data.get('customer_data', {}) if project_data else {}
 
-    doc = SimpleDocTemplate(main_offer_buffer, title=get_text(texts, "pdf_offer_title_doc_param", "Angebot: Photovoltaikanlage").format(offer_number=offer_number_final),
-                            author=company_info.get("name", "SolarFirma"), pagesize=pagesizes.A4,
-                            leftMargin=2*cm, rightMargin=2*cm, topMargin=2.5*cm, bottomMargin=2.5*cm)
-
-    story: List[Any] = []
+def _create_cover_page(
+    project_data: Dict[str, Any], 
+    company_info: Dict[str, Any], 
+    company_logo_base64: Optional[str],
+    selected_title_image_b64: Optional[str],
+    selected_offer_title_text: str,
+    selected_cover_letter_text: str,
+    offer_number: str,
+    texts: Dict[str, str]
+) -> List[Any]:
+    """Erstellt das Deckblatt für das PDF"""
+    elements = []
     
-    current_project_data_pdf = project_data if isinstance(project_data, dict) else {}
-    current_analysis_results_pdf = analysis_results if isinstance(analysis_results, dict) else {}
-    customer_pdf = current_project_data_pdf.get("customer_data", {})
+    # Titel
+    elements.append(Paragraph(selected_offer_title_text, STYLES.get('OfferTitle')))
+    elements.append(Spacer(1, 1*cm))
+    
+    # Angebotsnummer
+    elements.append(Paragraph(
+        f"{get_text(texts, 'offer_number', 'Angebots-Nr.')}: {offer_number}",
+        STYLES.get('SectionTitle')
+    ))
+    elements.append(Spacer(1, 1*cm))
+    
+    # Firmenlogo falls vorhanden
+    if company_logo_base64:
+        try:
+            logo_image = _get_image_flowable(company_logo_base64, 4*cm, texts)
+            if logo_image:
+                elements.extend(logo_image)
+                elements.append(Spacer(1, 1*cm))
+        except Exception:
+            pass
+    
+    # Firmeninformationen
+    company_text = f"""
+    <b>{company_info.get('name', '')}</b><br/>
+    {company_info.get('street', '')}<br/>
+    {company_info.get('zip_code', '')} {company_info.get('city', '')}<br/>
+    """
+    elements.append(Paragraph(company_text, STYLES.get('NormalCenter')))
+    elements.append(Spacer(1, 2*cm))
+    
+    # Kundendaten falls verfügbar
+    if project_data and project_data.get('customer_data'):
+        customer = project_data['customer_data']
+        customer_text = f"""
+        <b>{get_text(texts, 'customer_info', 'Kunde')}:</b><br/>
+        {customer.get('first_name', '')} {customer.get('last_name', '')}<br/>
+        {customer.get('street', '')}<br/>
+        {customer.get('zip_code', '')} {customer.get('city', '')}
+        """
+        elements.append(Paragraph(customer_text, STYLES.get('NormalLeft')))
+    
+    return elements
+
+
+def _create_project_overview_section(project_data: Dict[str, Any], texts: Dict[str, str]) -> List[Any]:
+    """Erstellt die Projektübersicht"""
+    elements = []
+    
+    elements.append(Paragraph(
+        get_text(texts, 'project_overview_title', 'Projektübersicht'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    if project_data and project_data.get('project_details'):
+        details = project_data['project_details']
+        
+        # Grunddaten
+        data = []
+        if details.get('module_quantity'):
+            data.append([
+                get_text(texts, 'module_count', 'Anzahl Module'),
+                str(details['module_quantity'])
+            ])
+        
+        if details.get('peak_power'):
+            data.append([
+                get_text(texts, 'peak_power', 'Spitzenleistung'),
+                f"{details['peak_power']} kWp"
+            ])
+        
+        if data:
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, -1), FONT_NORMAL),
+                ('FONTSIZE', (0, 0), (-1, -1), 10),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ]))
+            elements.append(table)
+    
+    elements.append(Spacer(1, 1*cm))
+    return elements
+
+
+def _create_components_section(
+    project_data: Dict[str, Any], 
+    list_products_func: Callable,
+    get_product_by_id_func: Callable,
+    texts: Dict[str, str]
+) -> List[Any]:
+    """Erstellt die Komponenten-Sektion"""
+    elements = []
+    
+    elements.append(Paragraph(
+        get_text(texts, 'components_title', 'Systemkomponenten'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    if project_data and project_data.get('project_details'):
+        details = project_data['project_details']
+        
+        # Module
+        if details.get('selected_module_id'):
+            try:
+                module = get_product_by_id_func(details['selected_module_id'])
+                if module:
+                    elements.append(Paragraph(
+                        f"<b>{get_text(texts, 'solar_module', 'Solarmodul')}:</b> {module.get('model_name', 'Unbekannt')}",
+                        STYLES.get('NormalLeft')
+                    ))
+            except Exception:
+                pass
+        
+        # Wechselrichter
+        if details.get('selected_inverter_id'):
+            try:
+                inverter = get_product_by_id_func(details['selected_inverter_id'])
+                if inverter:
+                    elements.append(Paragraph(
+                        f"<b>{get_text(texts, 'inverter', 'Wechselrichter')}:</b> {inverter.get('model_name', 'Unbekannt')}",
+                        STYLES.get('NormalLeft')
+                    ))
+            except Exception:
+                pass
+        
+        # Speicher
+        if details.get('include_storage') and details.get('selected_storage_id'):
+            try:
+                storage = get_product_by_id_func(details['selected_storage_id'])
+                if storage:
+                    elements.append(Paragraph(
+                        f"<b>{get_text(texts, 'battery_storage', 'Batteriespeicher')}:</b> {storage.get('model_name', 'Unbekannt')}",
+                        STYLES.get('NormalLeft')
+                    ))
+            except Exception:
+                pass
+    
+    elements.append(Spacer(1, 1*cm))
+    return elements
+
+
+def _create_analysis_section(analysis_results: Dict[str, Any], texts: Dict[str, str]) -> List[Any]:
+    """Erstellt die Analyse-Sektion"""
+    elements = []
+    
+    elements.append(Paragraph(
+        get_text(texts, 'analysis_title', 'Wirtschaftlichkeitsanalyse'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    # Wirtschaftlichkeits-KPIs
+    data = []
+    
+    if analysis_results.get('annual_yield_kwh'):
+        data.append([
+            get_text(texts, 'annual_yield', 'Jährlicher Ertrag'),
+            f"{analysis_results['annual_yield_kwh']:,.0f} kWh".replace(',', '.')
+        ])
+    
+    if analysis_results.get('autarkie_grad_percent'):
+        data.append([
+            get_text(texts, 'self_sufficiency', 'Autarkiegrad'),
+            f"{analysis_results['autarkie_grad_percent']:.1f}%"
+        ])
+    
+    if analysis_results.get('eigenverbrauch_percent'):
+        data.append([
+            get_text(texts, 'self_consumption', 'Eigenverbrauch'),
+            f"{analysis_results['eigenverbrauch_percent']:.1f}%"
+        ])
+    
+    if analysis_results.get('payback_years'):
+        data.append([
+            get_text(texts, 'payback_period', 'Amortisationszeit'),
+            f"{analysis_results['payback_years']:.1f} Jahre"
+        ])
+    
+    if data:
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), FONT_NORMAL),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        elements.append(table)
+    
+    elements.append(Spacer(1, 1*cm))
+    return elements
+
+
+def _create_costs_section(analysis_results: Dict[str, Any], texts: Dict[str, str]) -> List[Any]:
+    """Erstellt die Kosten-Sektion"""
+    elements = []
+    
+    elements.append(Paragraph(
+        get_text(texts, 'costs_title', 'Kostenübersicht'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    data = []
+    
+    # Investitionskosten
+    if analysis_results.get('total_investment_cost'):
+        data.append([
+            get_text(texts, 'investment_cost', 'Investitionskosten'),
+            f"{analysis_results['total_investment_cost']:,.2f} €".replace(',', '.')
+        ])
+    
+    # Jährliche Einsparungen
+    if analysis_results.get('annual_savings'):
+        data.append([
+            get_text(texts, 'annual_savings', 'Jährliche Einsparungen'),
+            f"{analysis_results['annual_savings']:,.2f} €".replace(',', '.')
+        ])
+    
+    # 20-Jahre Gewinn
+    if analysis_results.get('total_profit_20_years'):
+        data.append([
+            get_text(texts, 'total_profit_20y', 'Gewinn nach 20 Jahren'),
+            f"{analysis_results['total_profit_20_years']:,.2f} €".replace(',', '.')
+        ])
+    
+    if data:
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), FONT_NORMAL),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        elements.append(table)
+    
+    elements.append(Spacer(1, 1*cm))
+    return elements
+
+
+def _create_financing_section(analysis_results: Dict[str, Any], texts: Dict[str, str]) -> List[Any]:
+    """Erstellt die Finanzierungs-Sektion"""
+    elements = []
+    
+    elements.append(Paragraph(
+        get_text(texts, 'financing_title', 'Finanzierungsmöglichkeiten'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    elements.append(Paragraph(
+        get_text(texts, 'financing_info', 'Sprechen Sie uns auf individuelle Finanzierungslösungen an.'),
+        STYLES.get('NormalLeft')
+    ))
+    
+    elements.append(Spacer(1, 1*cm))
+    return elements
+
+
+def _create_footer_section(company_info: Dict[str, Any], texts: Dict[str, str]) -> List[Any]:
+    """Erstellt den Footer-Bereich"""
+    elements = []
+    
+    elements.append(Spacer(1, 2*cm))
+    elements.append(Paragraph(
+        get_text(texts, 'contact_info', 'Kontaktinformationen'),
+        STYLES.get('SectionTitle')
+    ))
+    
+    contact_text = f"""
+    <b>{company_info.get('name', '')}</b><br/>
+    {company_info.get('street', '')}<br/>
+    {company_info.get('zip_code', '')} {company_info.get('city', '')}<br/>
+    """
+    
+    if company_info.get('phone'):
+        contact_text += f"Tel.: {company_info['phone']}<br/>"
+    
+    if company_info.get('email'):
+        contact_text += f"E-Mail: {company_info['email']}<br/>"
+    
+    elements.append(Paragraph(contact_text, STYLES.get('NormalLeft')))
+    
+    return elements
+
+
+def _append_additional_documents(
+    main_pdf_bytes: bytes,
+    inclusion_options: Dict[str, Any],
+    project_data: Dict[str, Any],
+    get_product_by_id_func: Callable,
+    db_list_company_documents_func: Callable,
+    active_company_id: Optional[int]
+) -> bytes:
+    """Fügt zusätzliche Dokumente an das Haupt-PDF an"""
+    
+    if not _PYPDF_AVAILABLE:
+        return main_pdf_bytes
+    
+    try:
+        pdf_writer = PdfWriter()
+        
+        # Haupt-PDF hinzufügen
+        main_reader = PdfReader(BytesIO(main_pdf_bytes))
+        for page in main_reader.pages:
+            pdf_writer.add_page(page)
+        
+        # Produktdatenblätter hinzufügen
+        if project_data and project_data.get('project_details'):
+            details = project_data['project_details']
+            product_ids = []
+            
+            for key in ['selected_module_id', 'selected_inverter_id', 'selected_storage_id']:
+                if details.get(key):
+                    product_ids.append(details[key])
+            
+            for product_id in product_ids:
+                try:
+                    product = get_product_by_id_func(product_id)
+                    if product and product.get('datasheet_link_db_path'):
+                        datasheet_path = os.path.join(
+                            PRODUCT_DATASHEETS_BASE_DIR_PDF_GEN, 
+                            product['datasheet_link_db_path']
+                        )
+                        if os.path.exists(datasheet_path):
+                            datasheet_reader = PdfReader(datasheet_path)
+                            for page in datasheet_reader.pages:
+                                pdf_writer.add_page(page)
+                except Exception:
+                    pass
+        
+        # Firmendokumente hinzufügen
+        if (inclusion_options.get('company_document_ids_to_include') and 
+            active_company_id and callable(db_list_company_documents_func)):
+            
+            try:
+                company_docs = db_list_company_documents_func(active_company_id, None)
+                for doc_info in company_docs:
+                    if doc_info.get('id') in inclusion_options['company_document_ids_to_include']:
+                        if doc_info.get('relative_db_path'):
+                            doc_path = os.path.join(
+                                COMPANY_DOCS_BASE_DIR_PDF_GEN,
+                                doc_info['relative_db_path']
+                            )
+                            if os.path.exists(doc_path):
+                                doc_reader = PdfReader(doc_path)
+                                for page in doc_reader.pages:
+                                    pdf_writer.add_page(page)
+            except Exception:
+                pass
+        
+        # Zusammengebautes PDF zurückgeben
+        final_buffer = BytesIO()
+        pdf_writer.write(final_buffer)
+        final_pdf_bytes = final_buffer.getvalue()
+        final_buffer.close()
+        
+        return final_pdf_bytes
+        
+    except Exception:
+        # Bei Fehlern das Original-PDF zurückgeben
+        return main_pdf_bytes
+
+
+def _validate_pdf_data_availability(
+    project_data: Dict[str, Any], 
+    analysis_results: Dict[str, Any], 
+    texts: Dict[str, str]
+) -> Dict[str, Any]:
+    """
+    Validiert die verfügbaren Daten für die PDF-Erstellung.
+    
+    Returns:
+        Dict mit is_valid, warnings, critical_errors, missing_data_summary
+    """
+    
+    validation_result = {
+        'is_valid': True,
+        'warnings': [],
+        'critical_errors': [],
+        'missing_data_summary': []
+    }
+    
+    # Kritische Prüfungen (führen zu is_valid=False)
+    if not texts or not isinstance(texts, dict):
+        validation_result['critical_errors'].append('Keine Texte verfügbar')
+        validation_result['is_valid'] = False
+    
+    # Warnungen (führen nicht zu is_valid=False)
+    if not project_data or not isinstance(project_data, dict):
+        validation_result['warnings'].append('Keine Projektdaten verfügbar')
+        validation_result['missing_data_summary'].append('Projektdaten')
+    else:
+        if not project_data.get('customer_data', {}).get('last_name'):
+            validation_result['warnings'].append('Kein Kundenname verfügbar')
+            validation_result['missing_data_summary'].append('Kundendaten')
+        
+        if not project_data.get('project_details', {}).get('module_quantity'):
+            validation_result['warnings'].append('Keine Modulanzahl verfügbar')
+            validation_result['missing_data_summary'].append('Komponentendaten')
+    
+    if not analysis_results or not isinstance(analysis_results, dict):
+        validation_result['warnings'].append('Keine Analyseergebnisse verfügbar')
+        validation_result['missing_data_summary'].append('Wirtschaftlichkeitsdaten')
+    
+    return validation_result
+
+
+def _create_no_data_fallback_pdf(texts: Dict[str, str], customer_data: Dict[str, Any] = None) -> bytes:
+    """
+    Erstellt ein Fallback-PDF wenn nicht genügend Daten vorhanden sind.
+    
+    Args:
+        texts: Text-Dictionary
+        customer_data: Optionale Kundendaten
+        
+    Returns:
+        PDF-Bytes
+    """
+    
+    if not _REPORTLAB_AVAILABLE:
+        # Text-basiertes Fallback
+        return b"PDF-Erstellung nicht verfuegbar. ReportLab nicht installiert."
+    
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.styles import getSampleStyleSheet
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+    styles = getSampleStyleSheet()
+    story = []
+    
+    # Titel
+    title = get_text(texts, 'pdf_no_data_title', 'Photovoltaik-Angebot - Daten unvollständig')
+    story.append(Paragraph(title, styles['Title']))
+    story.append(Spacer(1, 1*cm))
+    
+    # Kundenanrede falls verfügbar
+    if customer_data and customer_data.get('last_name'):
+        customer_name = f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}".strip()
+        customer_text = get_text(texts, 'pdf_no_data_customer', f'Für: {customer_name}')
+        story.append(Paragraph(customer_text, styles['Normal']))
+        story.append(Spacer(1, 0.5*cm))
+    
+    # Haupttext
+    main_text = get_text(texts, 'pdf_no_data_message', 
+        '''Liebe Kundin, lieber Kunde,
+
+        für die Erstellung Ihres individuellen Photovoltaik-Angebots benötigen wir noch einige wichtige Informationen:
+
+        <b>Erforderliche Daten:</b>
+        • Gewünschte PV-Module und Komponenten
+        • Technische Angaben zu Ihrem Dach/Standort
+        • Verbrauchsdaten für die Wirtschaftlichkeitsberechnung
+
+        <b>Nächste Schritte:</b>
+        1. Vervollständigen Sie die Komponentenauswahl
+        2. Führen Sie die Wirtschaftlichkeitsberechnung durch
+        3. Erstellen Sie das finale Angebot
+
+        Vielen Dank für Ihr Verständnis.''')
+    
+    story.append(Paragraph(main_text, styles['Normal']))
+    story.append(Spacer(1, 1*cm))
+    
+    # Kontaktinformationen
+    contact_text = get_text(texts, 'pdf_no_data_contact', 
+        'Kontakt: Bitte wenden Sie sich an unser Beratungsteam für weitere Unterstützung.')
+    story.append(Paragraph(contact_text, styles['Normal']))
+    
+    doc.build(story)
+    buffer.seek(0)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    
+    return pdf_bytes
     pv_details_pdf = current_project_data_pdf.get("project_details", {})
     available_width_content = doc.width
 
@@ -1133,491 +1702,223 @@ def generate_offer_pdf(
                     
                     story.append(co2_table)
                     story.append(Spacer(1, 0.3 * cm))
-                    
-                    # CO₂-Grafik einfügen, falls verfügbar
+
+                for section_key_current, title_text_key_current, default_title_current in ordered_section_definitions_pdf:
                     co2_chart_bytes = current_analysis_results_pdf.get('co2_savings_chart_bytes')
-                    if co2_chart_bytes:
-                        try:
-                            co2_img = ImageReader(io.BytesIO(co2_chart_bytes))
-                            co2_image = Image(co2_img, width=16*cm, height=10*cm)
-                            story.append(co2_image)
-                            story.append(Spacer(1, 0.2 * cm))
-                        except Exception as e:
-                            print(f"Fehler beim Einfügen der CO₂-Grafik: {e}")
+                if co2_chart_bytes:
+                    try:
+                        co2_img = ImageReader(io.BytesIO(co2_chart_bytes))
+                        co2_image = Image(co2_img, width=16*cm, height=10*cm)
+                        story.append(co2_image)
+                        story.append(Spacer(1, 0.2 * cm))
+                    except Exception as e:
+                        print(f"Fehler beim Einfügen der CO₂-Grafik: {e}")
                     
                     # Abschließender motivierender Text
                     co2_conclusion = get_text(texts, "pdf_co2_conclusion", "Diese Zahlen verdeutlichen den positiven Umweltbeitrag Ihrer Photovoltaikanlage. Über die gesamte Betriebsdauer von 25+ Jahren summiert sich die CO₂-Einsparung auf mehrere Tonnen – ein wichtiger Schritt für den Klimaschutz und nachfolgende Generationen.")
                     story.append(Paragraph(co2_conclusion, STYLES.get('NormalLeft')))
 
-                elif section_key_current == "Visualizations":
-                    story.append(Paragraph(get_text(texts, "pdf_visualizations_intro", "Die folgenden Diagramme visualisieren die Ergebnisse Ihrer Photovoltaikanlage und deren Wirtschaftlichkeit:"), STYLES.get('NormalLeft')))
-                    story.append(Spacer(1, 0.3 * cm))
-                      # ERWEITERUNG: Vollständige Liste der Diagramme für PDF-Auswahl
-                    # Diese Map sollte idealerweise mit `chart_key_to_friendly_name_map` aus `pdf_ui.py` synchronisiert werden.
-                    charts_config_for_pdf_generator = {
-                        'monthly_prod_cons_chart_bytes': {"title_key": "pdf_chart_title_monthly_comp_pdf", "default_title": "Monatl. Produktion/Verbrauch (2D)"},
-                        'cost_projection_chart_bytes': {"title_key": "pdf_chart_label_cost_projection", "default_title": "Stromkosten-Hochrechnung (2D)"},
-                        'cumulative_cashflow_chart_bytes': {"title_key": "pdf_chart_label_cum_cashflow", "default_title": "Kumulierter Cashflow (2D)"},
-                        'consumption_coverage_pie_chart_bytes': {"title_key": "pdf_chart_title_consumption_coverage_pdf", "default_title": "Deckung Gesamtverbrauch (Jahr 1)"},
-                        'pv_usage_pie_chart_bytes': {"title_key": "pdf_chart_title_pv_usage_pdf", "default_title": "Nutzung PV-Strom (Jahr 1)"},
-                        'daily_production_switcher_chart_bytes': {"title_key": "pdf_chart_label_daily_3d", "default_title": "Tagesproduktion (3D)"},
-                        'weekly_production_switcher_chart_bytes': {"title_key": "pdf_chart_label_weekly_3d", "default_title": "Wochenproduktion (3D)"},
-                        'yearly_production_switcher_chart_bytes': {"title_key": "pdf_chart_label_yearly_3d_bar", "default_title": "Jahresproduktion (3D-Balken)"},
-                        'project_roi_matrix_switcher_chart_bytes': {"title_key": "pdf_chart_label_roi_matrix_3d", "default_title": "Projektrendite-Matrix (3D)"},
-                        'feed_in_revenue_switcher_chart_bytes': {"title_key": "pdf_chart_label_feedin_3d", "default_title": "Einspeisevergütung (3D)"},
-                        'prod_vs_cons_switcher_chart_bytes': {"title_key": "pdf_chart_label_prodcons_3d", "default_title": "Verbr. vs. Prod. (3D)"},
-                        'tariff_cube_switcher_chart_bytes': {"title_key": "pdf_chart_label_tariffcube_3d", "default_title": "Tarifvergleich (3D)"},
-                        'co2_savings_value_switcher_chart_bytes': {"title_key": "pdf_chart_label_co2value_3d", "default_title": "CO2-Ersparnis vs. Wert (3D)"},
-                        'co2_savings_chart_bytes': {"title_key": "pdf_chart_label_co2_realistic", "default_title": "CO₂-Einsparung (Realistische Darstellung)"},
-                        'investment_value_switcher_chart_bytes': {"title_key": "pdf_chart_label_investval_3D", "default_title": "Investitionsnutzwert (3D)"},
-                        'storage_effect_switcher_chart_bytes': {"title_key": "pdf_chart_label_storageeff_3d", "default_title": "Speicherwirkung (3D)"},
-                        'selfuse_stack_switcher_chart_bytes': {"title_key": "pdf_chart_label_selfusestack_3d", "default_title": "Eigenverbr. vs. Einspeis. (3D)"},
-                        'cost_growth_switcher_chart_bytes': {"title_key": "pdf_chart_label_costgrowth_3d", "default_title": "Stromkostensteigerung (3D)"},
-                        'selfuse_ratio_switcher_chart_bytes': {"title_key": "pdf_chart_label_selfuseratio_3d", "default_title": "Eigenverbrauchsgrad (3D)"},
-                        'roi_comparison_switcher_chart_bytes': {"title_key": "pdf_chart_label_roicompare_3d", "default_title": "ROI-Vergleich (3D)"},
-                        'scenario_comparison_switcher_chart_bytes': {"title_key": "pdf_chart_label_scenariocomp_3d", "default_title": "Szenarienvergleich (3D)"},
-                        'tariff_comparison_switcher_chart_bytes': {"title_key": "pdf_chart_label_tariffcomp_3d", "default_title": "Vorher/Nachher Stromkosten (3D)"},
-                        'income_projection_switcher_chart_bytes': {"title_key": "pdf_chart_label_incomeproj_3d", "default_title": "Einnahmenprognose (3D)"},
-                        'yearly_production_chart_bytes': {"title_key": "pdf_chart_label_pvvis_yearly", "default_title": "PV Visuals: Jahresproduktion"},
-                        'break_even_chart_bytes': {"title_key": "pdf_chart_label_pvvis_breakeven", "default_title": "PV Visuals: Break-Even"},
-                        'amortisation_chart_bytes': {"title_key": "pdf_chart_label_pvvis_amort", "default_title": "PV Visuals: Amortisation"},
-                    }
-                    charts_added_count = 0
-                    selected_charts_for_pdf_opt = inclusion_options.get("selected_charts_for_pdf", [])
-                    
-                    for chart_key, config in charts_config_for_pdf_generator.items():
-                        if chart_key not in selected_charts_for_pdf_opt:
-                            continue # Überspringe dieses Diagramm, wenn nicht vom Nutzer ausgewählt
+                
+                if section_key_current in active_sections_set_pdf:
+                    if section_key_current == "Visualizations":
+                        story.append(Paragraph(
+                            get_text(
+                                texts,
+                                "pdf_visualizations_intro",
+                                "Die folgenden Diagramme visualisieren die Ergebnisse Ihrer Photovoltaikanlage und deren Wirtschaftlichkeit:"
+                            ),
+                            STYLES.get('NormalLeft')
+                        ))
+                        # Spacer gehört hier _ohne_ except
+                        story.append(Spacer(1, 0.3 * cm))
 
-                        chart_image_bytes = current_analysis_results_pdf.get(chart_key)
-                        if chart_image_bytes and isinstance(chart_image_bytes, bytes):
-                            chart_display_title = get_text(texts, config["title_key"], config["default_title"])
-                            story.append(Paragraph(chart_display_title, STYLES.get('ChartTitle')))
-                            img_flowables_chart = _get_image_flowable(chart_image_bytes, available_width_content * 0.9, texts, max_height=12*cm, align='CENTER')
-                            if img_flowables_chart: story.extend(img_flowables_chart); story.append(Spacer(1, 0.7*cm)); charts_added_count += 1
-                            else: story.append(Paragraph(get_text(texts, "pdf_chart_load_error_placeholder_param", f"(Fehler beim Laden: {chart_display_title})"), STYLES.get('NormalCenter'))); story.append(Spacer(1, 0.5*cm))
-                    
-                    if charts_added_count == 0 and selected_charts_for_pdf_opt : # Wenn Charts ausgewählt wurden, aber keine gerendert werden konnten
-                         story.append(Paragraph(get_text(texts, "pdf_selected_charts_not_renderable", "Ausgewählte Diagramme konnten nicht geladen/angezeigt werden."), STYLES.get('NormalCenter')))
-                    elif not selected_charts_for_pdf_opt : # Wenn gar keine Charts ausgewählt wurden
-                         story.append(Paragraph(get_text(texts, "pdf_no_charts_selected_for_section", "Keine Diagramme für diese Sektion ausgewählt."), STYLES.get('NormalCenter')))
+                            # ERWEITERUNG: …
+                        charts_config_for_pdf_generator = {
+                    'monthly_prod_cons_chart_bytes':       {"title_key": "pdf_chart_title_monthly_comp_pdf",    "default_title": "Monatl. Produktion/Verbrauch (2D)"},
+                    'cost_projection_chart_bytes':         {"title_key": "pdf_chart_label_cost_projection",      "default_title": "Stromkosten-Hochrechnung (2D)"},
+                    'cumulative_cashflow_chart_bytes':     {"title_key": "pdf_chart_label_cum_cashflow",        "default_title": "Kumulierter Cashflow (2D)"},
+                    'consumption_coverage_pie_chart_bytes':{"title_key": "pdf_chart_title_consumption_coverage_pdf","default_title": "Deckung Gesamtverbrauch (Jahr 1)"},
+                    'pv_usage_pie_chart_bytes':            {"title_key": "pdf_chart_title_pv_usage_pdf",        "default_title": "Nutzung PV-Strom (Jahr 1)"},
+                    'daily_production_switcher_chart_bytes':{"title_key": "pdf_chart_label_daily_3d",            "default_title": "Tagesproduktion (3D)"},
+                    'weekly_production_switcher_chart_bytes':{"title_key": "pdf_chart_label_weekly_3d",           "default_title": "Wochenproduktion (3D)"},
+                    'yearly_production_switcher_chart_bytes':{"title_key": "pdf_chart_label_yearly_3d_bar",      "default_title": "Jahresproduktion (3D-Balken)"},
+                    'project_roi_matrix_switcher_chart_bytes':{"title_key": "pdf_chart_label_roi_matrix_3d",      "default_title": "Projektrendite-Matrix (3D)"},
+                    'feed_in_revenue_switcher_chart_bytes':{"title_key": "pdf_chart_label_feedin_3d",           "default_title": "Einspeisevergütung (3D)"},
+                    'prod_vs_cons_switcher_chart_bytes':   {"title_key": "pdf_chart_label_prodcons_3d",        "default_title": "Verbr. vs. Prod. (3D)"},
+                    'tariff_cube_switcher_chart_bytes':    {"title_key": "pdf_chart_label_tariffcube_3d",      "default_title": "Tarifvergleich (3D)"},
+                    'co2_savings_value_switcher_chart_bytes':{"title_key": "pdf_chart_label_co2value_3d",       "default_title": "CO₂-Ersparnis vs. Wert (3D)"},
+                    'co2_savings_chart_bytes':            {"title_key": "pdf_chart_label_co2_realistic",       "default_title": "CO₂-Einsparung (Realistische Darstellung)"},
+                    'investment_value_switcher_chart_bytes':{"title_key": "pdf_chart_label_investval_3D",       "default_title": "Investitionsnutzwert (3D)"},
+                    'storage_effect_switcher_chart_bytes':{"title_key": "pdf_chart_label_storageeff_3d",       "default_title": "Speicherwirkung (3D)"},
+                    'selfuse_stack_switcher_chart_bytes': {"title_key": "pdf_chart_label_selfusestack_3d",    "default_title": "Eigenverbr. vs. Einspeis. (3D)"},
+                    'cost_growth_switcher_chart_bytes':    {"title_key": "pdf_chart_label_costgrowth_3d",      "default_title": "Stromkostensteigerung (3D)"},
+                    'selfuse_ratio_switcher_chart_bytes':  {"title_key": "pdf_chart_label_selfuseratio_3d",    "default_title": "Eigenverbrauchsgrad (3D)"},
+                    'roi_comparison_switcher_chart_bytes':{"title_key": "pdf_chart_label_roicompare_3d",     "default_title": "ROI-Vergleich (3D)"},
+                    'scenario_comparison_switcher_chart_bytes':{"title_key": "pdf_chart_label_scenariocomp_3d","default_title": "Szenarienvergleich (3D)"},
+                    'tariff_comparison_switcher_chart_bytes':{"title_key": "pdf_chart_label_tariffcomp_3d",   "default_title": "Vorher/Nachher Stromkosten (3D)"},
+                    'income_projection_switcher_chart_bytes':{"title_key": "pdf_chart_label_incomeproj_3d",   "default_title": "Einnahmenprognose (3D)"},
+                    'yearly_production_chart_bytes':      {"title_key": "pdf_chart_label_pvvis_yearly",       "default_title": "PV Visuals: Jahresproduktion"},
+                    'break_even_chart_bytes':             {"title_key": "pdf_chart_label_pvvis_breakeven",    "default_title": "PV Visuals: Break-Even"},
+                    'amortisation_chart_bytes':           {"title_key": "pdf_chart_label_pvvis_amort",        "default_title": "PV Visuals: Amortisation"},
+                }
 
-                elif section_key_current == "FutureAspects":
-                    future_aspects_text = ""
-                    if pv_details_pdf.get('future_ev'):
-                        future_aspects_text += get_text(texts, "pdf_future_ev_text_param", "<b>E-Mobilität:</b> Die Anlage ist auf eine zukünftige Erweiterung um ein Elektrofahrzeug vorbereitet. Der prognostizierte PV-Anteil an der Fahrzeugladung beträgt ca. {eauto_pv_coverage_kwh:.0f} kWh/Jahr.").format(eauto_pv_coverage_kwh=current_analysis_results_pdf.get('eauto_ladung_durch_pv_kwh',0.0)) + "<br/>"
-                    if pv_details_pdf.get('future_hp'):
-                        future_aspects_text += get_text(texts, "pdf_future_hp_text_param", "<b>Wärmepumpe:</b> Die Anlage kann zur Unterstützung einer zukünftigen Wärmepumpe beitragen. Der geschätzte PV-Deckungsgrad für die Wärmepumpe liegt bei ca. {hp_pv_coverage_pct:.0f}%. ").format(hp_pv_coverage_pct=current_analysis_results_pdf.get('pv_deckungsgrad_wp_pct',0.0)) + "<br/>"
-                    if not future_aspects_text: future_aspects_text = get_text(texts, "pdf_no_future_aspects_selected", "Keine spezifischen Zukunftsaspekte für dieses Angebot ausgewählt.")
-                    story.append(Paragraph(future_aspects_text, STYLES.get('NormalLeft')))
-                
-                # NEUE OPTIONALE SEITENVORLAGEN (individuell gestaltbar, wie gewünscht)
-                elif section_key_current == "CompanyProfile":
-                    company_profile_text = get_text(texts, "pdf_company_profile_content", 
-                        f"<b>{company_info.get('name', 'Unser Unternehmen')}</b><br/><br/>"
-                        f"Mit langjähriger Erfahrung im Bereich Photovoltaik sind wir Ihr zuverlässiger Partner für nachhaltige Energielösungen. "
-                        f"Unser engagiertes Team begleitet Sie von der ersten Beratung bis zur finalen Inbetriebnahme Ihrer Anlage.<br/><br/>"
-                        f"<b>Kontakt:</b><br/>"
-                        f"📍 {company_info.get('street', '')}, {company_info.get('zip_code', '')} {company_info.get('city', '')}<br/>"
-                        f"📞 {company_info.get('phone', '')}<br/>"
-                        f"📧 {company_info.get('email', '')}")
-                    story.append(Paragraph(company_profile_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Certifications":
-                    cert_text = get_text(texts, "pdf_certifications_content",
-                        "<b>Unsere Zertifizierungen & Qualitätsstandards:</b><br/><br/>"
-                        "✓ <b>VDE-Zertifizierung</b> - Elektrotechnische Sicherheit<br/>"
-                        "✓ <b>Meisterbetrieb</b> - Handwerkliche Qualität<br/>"
-                        "✓ <b>IHK-Sachverständiger</b> - Technische Expertise<br/>"
-                        "✓ <b>ISO 9001</b> - Qualitätsmanagementsystem<br/>"
-                        "✓ <b>Fachbetrieb für Photovoltaik</b> - Spezialisierung<br/><br/>"
-                        "Alle Komponenten entsprechen den aktuellen DIN- und VDE-Normen.")
-                    story.append(Paragraph(cert_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "References":
-                    ref_text = get_text(texts, "pdf_references_content",
-                        "<b>Referenzen & Kundenerfahrungen:</b><br/><br/>"
-                        "⭐⭐⭐⭐⭐ <i>\"Professionelle Beratung und saubere Montage. Unsere Anlage läuft seit 2 Jahren perfekt!\"</i><br/>"
-                        "- Familie Müller, 8,5 kWp Anlage<br/><br/>"
-                        "⭐⭐⭐⭐⭐ <i>\"Von der Planung bis zur Inbetriebnahme - alles aus einer Hand und termingerecht.\"</i><br/>"
-                        "- Herr Schmidt, 12 kWp mit Speicher<br/><br/>"
-                        "⭐⭐⭐⭐⭐ <i>\"Kompetente Beratung, faire Preise, einwandfreie Ausführung. Sehr empfehlenswert!\"</i><br/>"
-                        "- Frau Weber, 6,2 kWp Anlage<br/><br/>"
-                        "<b>Über 500 zufriedene Kunden</b> vertrauen auf unsere Expertise.")
-                    story.append(Paragraph(ref_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Installation":
-                    install_text = get_text(texts, "pdf_installation_content",
-                        "<b>Professionelle Installation - Ihr Weg zur eigenen Solaranlage:</b><br/><br/>"
-                        "<b>1. Terminplanung & Vorbereitung</b><br/>"
-                        "• Detaillierte Terminabsprache<br/>"
-                        "• Anmeldung beim Netzbetreiber<br/>"
-                        "• Bereitstellung aller Komponenten<br/><br/>"
-                        "<b>2. Montage (1-2 Tage)</b><br/>"
-                        "• Dachmontage durch zertifizierte Dachdecker<br/>"
-                        "• Elektrische Installation durch Elektromeister<br/>"
-                        "• Sicherheitsprüfung nach VDE-Norm<br/><br/>"
-                        "<b>3. Inbetriebnahme & Übergabe</b><br/>"
-                        "• Funktionstest und Messung<br/>"
-                        "• Einweisung in die Bedienung<br/>"
-                        "• Übergabe aller Unterlagen")
-                    story.append(Paragraph(install_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Maintenance":
-                    maint_text = get_text(texts, "pdf_maintenance_content",
-                        "<b>Wartung & Langzeitservice für maximale Erträge:</b><br/><br/>"
-                        "<b>Wartungsleistungen:</b><br/>"
-                        "• Jährliche Sichtprüfung der Module<br/>"
-                        "• Überprüfung der elektrischen Verbindungen<br/>"
-                        "• Funktionstest des Wechselrichters<br/>"
-                        "• Reinigung bei Bedarf<br/>"
-                        "• Ertragskontrolle und Optimierung<br/><br/>"
-                        "<b>24/7 Monitoring:</b><br/>"
-                        "• Online-Überwachung der Anlagenleistung<br/>"
-                        "• Automatische Störungsmeldung<br/>"
-                        "• Ferndiagnose und schnelle Hilfe<br/><br/>"
-                        "<b>Wartungsvertrag verfügbar</b> - Sprechen Sie uns an!")
-                    story.append(Paragraph(maint_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Financing":
-                    fin_text = get_text(texts, "pdf_financing_content",
-                        "<b>Flexible Finanzierungsmöglichkeiten:</b><br/><br/>"
-                        "💰 <b>KfW-Förderung</b><br/>"
-                        "• Zinsgünstige Darlehen bis 150.000€<br/>"
-                        "• Tilgungszuschüsse möglich<br/>"
-                        "• Wir unterstützen bei der Antragstellung<br/><br/>"
-                        "🏦 <b>Bankfinanzierung</b><br/>"
-                        "• Partnerschaften mit regionalen Banken<br/>"
-                        "• Attraktive Konditionen für Solaranlagen<br/>"
-                        "• Laufzeiten bis 20 Jahre<br/><br/>"
-                        "📊 <b>Leasing & Pacht</b><br/>"
-                        "• Keine Anfangsinvestition<br/>"
-                        "• Monatliche Raten ab 89€<br/>"
-                        "• Rundum-Sorglos-Paket inklusive<br/><br/>"
-                        "Gerne erstellen wir Ihnen ein individuelles Finanzierungskonzept!")
-                    story.append(Paragraph(fin_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Insurance":
-                    ins_text = get_text(texts, "pdf_insurance_content",
-                        "<b>Umfassender Versicherungsschutz für Ihre Investition:</b><br/><br/>"
-                        "🛡️ <b>Photovoltaik-Versicherung</b><br/>"
-                        "• Schutz vor Sturm, Hagel, Blitzschlag<br/>"
-                        "• Diebstahl- und Vandalismus-Schutz<br/>"
-                        "• Elektronikversicherung für Wechselrichter<br/><br/>"
-                        "⚡ <b>Ertragsausfallversicherung</b><br/>"
-                        "• Absicherung bei Produktionsausfall<br/>"
-                        "• Ersatz entgangener EEG-Vergütung<br/>"
-                        "• Mehrkosten bei Reparaturen<br/><br/>"
-                        "🏠 <b>Integration in bestehende Versicherungen</b><br/>"
-                        "• Prüfung der Wohngebäudeversicherung<br/>"
-                        "• Anpassung bestehender Policen<br/>"
-                        "• Kostengünstige Ergänzungen<br/><br/>"
-                        "Wir beraten Sie gerne zu optimalen Versicherungslösungen!")
-                    story.append(Paragraph(ins_text, STYLES.get('NormalLeft')))
-                
-                elif section_key_current == "Warranty":
-                    warr_text = get_text(texts, "pdf_warranty_content",
-                        "<b>Garantie & Gewährleistung - Ihre Sicherheit:</b><br/><br/>"
-                        "🔧 <b>Herstellergarantien:</b><br/>"
-                        "• <b>Module:</b> 25 Jahre Leistungsgarantie<br/>"
-                        "• <b>Wechselrichter:</b> 10-20 Jahre Herstellergarantie<br/>"
-                        "• <b>Speichersystem:</b> 10 Jahre Garantie<br/>"
-                        "• <b>Montagesystem:</b> 15 Jahre Material-/Korrosionsschutz<br/><br/>"
-                        "⚙️ <b>Handwerkergewährleistung:</b><br/>"
-                        "• 2 Jahre auf Montage und Installation<br/>"
-                        "• 5 Jahre erweiterte Gewährleistung möglich<br/>"
-                        "• Schnelle Reaktionszeiten bei Problemen<br/><br/>"
-                        "📞 <b>Service-Hotline:</b><br/>"
-                        "• Kostenlose Beratung bei Fragen<br/>"
-                        "• Ferndiagnose und Support<br/>"
-                        "• Vor-Ort-Service innerhalb 48h<br/><br/>"
-                        "<b>Ihr Vertrauen ist unsere Verpflichtung!</b>")
-                    story.append(Paragraph(warr_text, STYLES.get('NormalLeft')))
-                    story.append(Spacer(1, 0.5*cm)); current_section_counter_pdf +=1
-            except Exception as e_section:
-                story.append(Paragraph(f"Fehler in Sektion '{default_title_current}': {e_section}", STYLES.get('NormalLeft')))
-                story.append(Spacer(1, 0.5*cm)); current_section_counter_pdf +=1
-    
-    main_pdf_bytes: Optional[bytes] = None
-    try:
-        layout_callback_kwargs_build = {
-            'texts_ref': texts, 'company_info_ref': company_info,
-            'company_logo_base64_ref': company_logo_base64 if include_company_logo_opt else None,
-            'offer_number_ref': offer_number_final, 'page_width_ref': doc.pagesize[0], 
-            'page_height_ref': doc.pagesize[1],'margin_left_ref': doc.leftMargin, 
-            'margin_right_ref': doc.rightMargin,'margin_top_ref': doc.topMargin, 
-            'margin_bottom_ref': doc.bottomMargin,'doc_width_ref': doc.width, 'doc_height_ref': doc.height,
-            # NEUE OPTIONEN (wie gewünscht)
-            'include_custom_footer_ref': include_custom_footer_opt,
-            'include_header_logo_ref': include_header_logo_opt
-        }
-        doc.build(story, canvasmaker=lambda *args, **kwargs_c: PageNumCanvas(*args, onPage_callback=page_layout_handler, callback_kwargs=layout_callback_kwargs_build, **kwargs_c))
-        main_pdf_bytes = main_offer_buffer.getvalue()
-    except Exception as e_build_pdf:
-        return _create_plaintext_pdf_fallback(project_data, analysis_results, texts, company_info, selected_offer_title_text, selected_cover_letter_text)
-    finally:
-        main_offer_buffer.close()
-    
-    if not main_pdf_bytes: 
-        return None
-    
-    # PDF-Anhänge nur wenn beide Bedingungen erfüllt sind
-    if not (include_all_documents_opt and _PYPDF_AVAILABLE):
-        return main_pdf_bytes
+                charts_added_count = 0
+                selected_charts_for_pdf_opt = inclusion_options.get("selected_charts_for_pdf", [])
 
-    paths_to_append: List[str] = []
-    debug_info = {
-        'product_datasheets_found': [],
-        'product_datasheets_missing': [],
-        'company_docs_found': [],
-        'company_docs_missing': [],
-        'total_paths_to_append': 0
-    }
-    
-    # Produktdatenblätter (Hauptkomponenten UND Zubehör)
-    product_ids_for_datasheets = list(filter(None, [
-        pv_details_pdf.get("selected_module_id"),
-        pv_details_pdf.get("selected_inverter_id"),
-        pv_details_pdf.get("selected_storage_id") if pv_details_pdf.get("include_storage") else None
-    ]))
-    if pv_details_pdf.get('include_additional_components', False): # Nur wenn Zubehör überhaupt aktiv ist
-        for opt_id_key in ['selected_wallbox_id', 'selected_ems_id', 'selected_optimizer_id', 'selected_carport_id', 'selected_notstrom_id', 'selected_tierabwehr_id']:
-            comp_id_val = pv_details_pdf.get(opt_id_key)
-            if comp_id_val: product_ids_for_datasheets.append(comp_id_val)
-    
-    # Duplikate entfernen, falls ein Produkt mehrfach auftaucht (unwahrscheinlich, aber sicher)
-    product_ids_for_datasheets = list(set(product_ids_for_datasheets))
+                for chart_key, config in charts_config_for_pdf_generator.items():
+                    if chart_key not in selected_charts_for_pdf_opt:
+                        continue
 
-    for prod_id in product_ids_for_datasheets:
-        try:
-            product_info = get_product_by_id_func(prod_id) 
-            if product_info:
-                datasheet_path_from_db = product_info.get("datasheet_link_db_path")
-                if datasheet_path_from_db:
-                    full_datasheet_path = os.path.join(PRODUCT_DATASHEETS_BASE_DIR_PDF_GEN, datasheet_path_from_db)
-                    if os.path.exists(full_datasheet_path):
-                        paths_to_append.append(full_datasheet_path)
-                        debug_info['product_datasheets_found'].append({'id': prod_id, 'model': product_info.get('model_name'), 'path': full_datasheet_path})
+                    chart_image_bytes = current_analysis_results_pdf.get(chart_key)
+                    if isinstance(chart_image_bytes, (bytes, bytearray)):
+                        title = get_text(texts, config["title_key"], config["default_title"])
+                        story.append(Paragraph(title, STYLES.get('ChartTitle')))
+                        flowables = _get_image_flowable(
+                            chart_image_bytes,
+                            available_width_content * 0.9,
+                            texts,
+                            max_height=12 * cm,
+                            align='CENTER'
+                        )
+                        story.extend(flowables)
+                        story.append(Spacer(1, 0.7 * cm))
+                        charts_added_count += 1
                     else:
-                        debug_info['product_datasheets_missing'].append({'id': prod_id, 'model': product_info.get('model_name'), 'path': full_datasheet_path})
-                else:
-                    debug_info['product_datasheets_missing'].append({'id': prod_id, 'model': product_info.get('model_name'), 'reason': 'Kein Datenblatt-Pfad in DB'})
-            else:
-                debug_info['product_datasheets_missing'].append({'id': prod_id, 'reason': 'Produkt nicht in DB gefunden'})
-        except Exception as e_prod:
-            # Fehler beim Laden von Produktinformationen - wird still behandelt
-            pass
-            
-    # Firmendokumente
-    if company_document_ids_to_include_opt and active_company_id is not None and callable(db_list_company_documents_func):
-        try:
-            all_company_docs_for_active_co = db_list_company_documents_func(active_company_id, None) # doc_type=None für alle
-            for doc_info in all_company_docs_for_active_co:
-                if doc_info.get('id') in company_document_ids_to_include_opt:
-                    relative_doc_path = doc_info.get("relative_db_path") 
-                    if relative_doc_path: 
-                        full_doc_path = os.path.join(COMPANY_DOCS_BASE_DIR_PDF_GEN, relative_doc_path)
-                        if os.path.exists(full_doc_path):
-                            paths_to_append.append(full_doc_path)
-                            debug_info['company_docs_found'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'path': full_doc_path})
-                        else:
-                            debug_info['company_docs_missing'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'path': full_doc_path})
-                    else:
-                        debug_info['company_docs_missing'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'reason': 'Kein relativer Pfad in DB'})
-        except Exception as e_company_docs:
-            # Fehler beim Laden der Firmendokumente - wird still behandelt
-            pass
-    
-    debug_info['total_paths_to_append'] = len(paths_to_append)
-    
-    if not paths_to_append: 
-        return main_pdf_bytes
-    
-    pdf_writer = PdfWriter()
-    try:
-        main_offer_reader = PdfReader(io.BytesIO(main_pdf_bytes))
-        for page in main_offer_reader.pages: 
-            pdf_writer.add_page(page)
-    except Exception as e_read_main:
-        return main_pdf_bytes 
+                        placeholder = get_text(
+                            texts,
+                            "pdf_chart_load_error_placeholder_param",
+                            f"(Fehler beim Laden: {config['default_title']})"
+                        )
+                        story.append(Paragraph(placeholder, STYLES.get('NormalCenter')))
+                        story.append(Spacer(1, 0.5 * cm))
 
-    successfully_appended = 0
-    for pdf_path in paths_to_append:
-        try:
-            datasheet_reader = PdfReader(pdf_path)
-            for page in datasheet_reader.pages: 
-                pdf_writer.add_page(page)
-            successfully_appended += 1
-        except Exception as e_append_ds:
-            pass  # Fehler beim Anhängen werden still behandelt
-    
-    final_buffer = io.BytesIO()
-    try:
-        pdf_writer.write(final_buffer)
-        final_pdf_bytes = final_buffer.getvalue()
-        return final_pdf_bytes
-    except Exception as e_write_final:
-        return main_pdf_bytes 
-    finally:
-        final_buffer.close()
+                if selected_charts_for_pdf_opt and charts_added_count == 0:
+                    story.append(Paragraph(
+                        get_text(texts, "pdf_selected_charts_not_renderable",
+                                 "Ausgewählte Diagramme konnten nicht geladen/angezeigt werden."),
+                        STYLES.get('NormalCenter')
+                    ))
+                elif not selected_charts_for_pdf_opt:
+                    story.append(Paragraph(
+                        get_text(texts, "pdf_no_charts_selected_for_section",
+                                 "Keine Diagramme für diese Sektion ausgewählt."),
+                        STYLES.get('NormalCenter')
+                    ))
 
-def _validate_pdf_data_availability(project_data: Dict[str, Any], analysis_results: Dict[str, Any], texts: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Validiert die Verfügbarkeit von Daten für die PDF-Erstellung und gibt Warnmeldungen zurück.
-    
-    Args:
-        project_data: Projektdaten
-        analysis_results: Analyseergebnisse
-        texts: Text-Dictionary
-        
-    Returns:
-        Dict mit Validierungsergebnissen und Warnmeldungen
-    """
-    validation_result = {
-        'is_valid': True,
-        'warnings': [],
-        'critical_errors': [],
-        'missing_data_summary': []
-    }
-    
-    # Kundendaten prüfen (nicht kritisch)
-    customer_data = project_data.get('customer_data', {})
-    if not customer_data or not customer_data.get('last_name'):
-        validation_result['warnings'].append(
-            get_text(texts, 'pdf_warning_no_customer_name', 'Kein Kundenname verfügbar - wird als "Kunde" angezeigt')
-        )
-        validation_result['missing_data_summary'].append('Kundenname')
-    
-    # PV-Details prüfen
-    pv_details = project_data.get('pv_details', {})
-    project_details = project_data.get('project_details', {})
-    
-    # Entweder module in pv_details ODER module_quantity in project_details ist ausreichend
-    modules_present = False
-    if pv_details and pv_details.get('selected_modules'):
-        modules_present = True
-    elif project_details and project_details.get('module_quantity', 0) > 0:
-        modules_present = True
-    
-    if not modules_present:
-        validation_result['warnings'].append(
-            get_text(texts, 'pdf_warning_no_modules', 'Keine PV-Module ausgewählt - Standardwerte werden verwendet')
-        )
-        validation_result['missing_data_summary'].append('PV-Module')
-        # Nur als Warnung, nicht als kritischer Fehler
-    
-    # Analyseergebnisse prüfen - mit mehr Toleranz
-    if not analysis_results or not isinstance(analysis_results, dict) or len(analysis_results) < 2:
-        # Wirklich leere oder sehr minimale Analyse ist ein kritischer Fehler
-        validation_result['critical_errors'].append(
-            get_text(texts, 'pdf_error_no_analysis', 'Keine Analyseergebnisse verfügbar - PDF kann nicht erstellt werden')
-        )
-        validation_result['is_valid'] = False
-        validation_result['missing_data_summary'].append('Analyseergebnisse')
-    else:
-        # Wenn die Analyse mindestens einige Werte enthält, betrachten wir es als gültig
-        # und geben nur Warnungen aus, wenn wichtige KPIs fehlen
-        important_kpis = ['anlage_kwp', 'annual_pv_production_kwh', 'total_investment_cost_netto']
-        missing_kpis = []
-        for kpi in important_kpis:
-            if not analysis_results.get(kpi):
-                missing_kpis.append(kpi)
-                
-        if missing_kpis:
-            missing_kpi_names = ', '.join(missing_kpis)
-            validation_result['warnings'].append(
-                get_text(texts, 'pdf_warning_missing_kpis', f'Fehlende wichtige Kennzahlen: {missing_kpi_names}')
+            # … hier folgen ggf. weitere elif-Blöcke für andere Sektionen …
+            except Exception as e:                                           
+                error_text = get_text(
+                texts,
+                "pdf_visualizations_error",
+                "Fehler beim Erstellen der Diagramme."
             )
-            validation_result['missing_data_summary'].extend(missing_kpis)
-            # Fehlende KPIs sind kein kritischer Fehler mehr
-    
-    # Firmendaten prüfen (nicht kritisch)
-    if not project_data.get('company_information', {}).get('name'):
-        validation_result['warnings'].append(
-            get_text(texts, 'pdf_warning_no_company', 'Keine Firmendaten verfügbar - Fallback wird verwendet')
-        )
-        validation_result['missing_data_summary'].append('Firmendaten')
-    
-    # Debug-Ausgabe
-    print(f"PDF Validierung: is_valid={validation_result['is_valid']}, "
-          f"Warnungen={len(validation_result['warnings'])}, "
-          f"Kritische Fehler={len(validation_result['critical_errors'])}")
-    
-    return validation_result
-def _create_no_data_fallback_pdf(texts: Dict[str, str], customer_data: Dict[str, Any] = None) -> bytes:
-    """
-    Erstellt eine Fallback-PDF mit Informationstext, wenn keine ausreichenden Daten verfügbar sind.
-    
-    Args:
-        texts: Text-Dictionary
-        customer_data: Optionale Kundendaten
-        
-    Returns:
-        PDF als Bytes
-    """
-    from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import cm
-    from io import BytesIO
-    
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
-    styles = getSampleStyleSheet()
-    story = []
-    
-    # Titel
-    title = get_text(texts, 'pdf_no_data_title', 'Photovoltaik-Angebot - Datensammlung erforderlich')
-    story.append(Paragraph(title, styles['Title']))
-    story.append(Spacer(1, 1*cm))
-    
-    # Kunde falls verfügbar
-    if customer_data and customer_data.get('last_name'):
-        customer_name = f"{customer_data.get('first_name', '')} {customer_data.get('last_name', '')}".strip()
-        customer_text = get_text(texts, 'pdf_no_data_customer', f'Für: {customer_name}')
-        story.append(Paragraph(customer_text, styles['Normal']))
-        story.append(Spacer(1, 0.5*cm))
-    
-    # Haupttext
-    main_text = get_text(texts, 'pdf_no_data_main_text', 
-        '''Liebe Kundin, lieber Kunde,
-        
-        für die Erstellung Ihres individuellen Photovoltaik-Angebots benötigen wir noch einige wichtige Informationen:
-        
-        <b>Erforderliche Daten:</b>
-        • Ihre Kontaktdaten (vollständig)
-        • Gewünschte PV-Module und Komponenten
-        • Stromverbrauchsdaten Ihres Haushalts
-        • Technische Angaben zu Ihrem Dach/Standort
-        
-        <b>Nächste Schritte:</b>
-        1. Vervollständigen Sie die Dateneingabe in der Anwendung
-        2. Führen Sie die Wirtschaftlichkeitsberechnung durch
-        3. Generieren Sie anschließend Ihr personalisiertes PDF-Angebot
-        
-        Bei Fragen stehen wir Ihnen gerne zur Verfügung!''')
-    
-    story.append(Paragraph(main_text, styles['Normal']))
-    story.append(Spacer(1, 1*cm))
-    
-    # Kontaktinformationen
-    contact_text = get_text(texts, 'pdf_no_data_contact', 
-        'Kontakt: Bitte wenden Sie sich an unser Beratungsteam für weitere Unterstützung.')
-    story.append(Paragraph(contact_text, styles['Normal']))
-    
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
-    
-# Änderungshistorie
-# 2025-06-03, Gemini Ultra: PageNumCanvas.save() korrigiert, um Duplizierung des PDF-Inhalts zu verhindern.
-#                           Schlüssel für `include_all_documents_opt` in `generate_offer_pdf` korrigiert.
-#                           Aufruf von `db_list_company_documents_func` mit `doc_type=None` versehen.
-#                           Anpassung von _update_styles_with_dynamic_colors für DATA_TABLE_STYLE.
-#                           Sicherstellung, dass ausgewählte Diagramme für PDF-Visualisierungen berücksichtigt werden.
-#                           Korrekter Key 'relative_db_path' für Firmendokumente verwendet.
-# 2025-06-03, Gemini Ultra: `charts_config_for_pdf_generator` erweitert, um alle Diagramme aus `pdf_ui.py` abzudecken.
-#                           Logik zur Einbindung optionaler Komponenten (Zubehör) in Sektion "Technische Komponenten" hinzugefügt, gesteuert durch `include_optional_component_details_opt`.
-#                           Logik zum Anhängen von Produktdatenblättern erweitert, um auch Zubehör-Datenblätter zu berücksichtigen.
-#                           Definition von ReportLab-Styles nur ausgeführt, wenn _REPORTLAB_AVAILABLE True ist.
-# 2025-06-03, Gemini Ultra: Validierungs- und Fallback-Funktionen für PDF-Erstellung ohne ausreichende Daten hinzugefügt.
+            story.append(Paragraph(error_text, STYLES.get('NormalLeft')))
+
+# ─── Ende der Abschnitts-Schleife ───────────────────────────────────────────
+# main_pdf_bytes: Optional[bytes] = Nonemain_pdf_bytes: Optional[bytes] = None
+mamain_offer_buffer = BytesIO()
+la    'texts_ref':                 texts,
+  layout_callback_kwargs_build = {    'company_logo_base64_ref':   company_logo_base64 if include_company_logo_opt else None,
+      'texts_ref':                 texts,    'page_width_ref':            doc.pagesize[0],
+      'company_info_ref':          company_info,    'margin_left_ref':           doc.leftMargin,
+      'company_logo_base64_ref':   company_logo_base64 if include_company_logo_opt else None,    'margin_top_ref':            doc.topMargin,
+      'offer_number_ref':          offer_number_final,    'include_custom_footer_ref': include_custom_footer_opt,
+      'page_width_ref':            doc.pagesize[0],}
+
+      'margin_left_ref':           doc.leftMargin,    doc.build(
+      'margin_right_ref':          doc.rightMargin,        canvasmaker=lambda *args, **kwargs_c: PageNumCanvas(
+      'margin_top_ref':            doc.topMargin,            onPage_callback=page_layout_handler,
+      'margin_bottom_ref':         doc.bottomMargin,            **kwargs_c
+      'include_custom_footer_ref': include_custom_footer_opt,    )
+      'include_header_logo_ref':   include_header_logo_optelse:
+      )        
+# if main_offer_buffer:
+  if doc and story:          # Ensure this code is placed inside the generate_offer_pdf function, properly indented:if not main_pdf_bytes: 
+if    doc.build(    return main_pdf_bytes
+
+          canvasmaker=lambda *args, **kwargs_c: PageNumCanvas(    debug_info = {
+              *args,        'company_docs_found': [],
+              onPage_callback=page_layout_handler,        'total_paths_to_append': 0
+              callback_kwargs=layout_callback_kwargs_build,    product_ids_for_datasheets = list(filter(None, [
+              **kwargs_c        pv_details_pdf.get("selected_inverter_id"),
+          )    ]))
+      ]        comp_id_val = pv_details_pdf.get(opt_id_key)
+      main_pdf_bytes = main_offer_buffer.getvalue()        # Duplikate entfernen, falls ein Produkt mehrfach auftaucht (unwahrscheinlich, aber sicher)
+
+el    main_pdf_bytes = None        product_ids_for_datasheets = list(filter(None, [
+          datasheet_path_from_db: pv_details_pdf.get("selected_inverter_id"),
+  if main_offer_buffer:        debug_info['product_datasheets_found'].append({'id': prod_id, 'model': product_info.get('model_name'), 'path': full_datasheet_path})
+      main_offer_buffer.close()          debug_info['product_datasheets_missing'].append({'id': prod_id, 'model': product_info.get('model_name'), 'path': full_datasheet_path})
+              debug_info['product_datasheets_missing'].append({'id': prod_id, 'model': product_info.get('model_name'), 'reason': 'Kein Datenblatt-Pfad in DB'})
+  if not main_pdf_bytes:            debug_info['product_datasheets_missing'].append({'id': prod_id, 'reason': 'Produkt nicht in DB gefunden'})
+      return main_pdf_bytes            if comp_id_val:
+      if company_document_ids_to_include_opt and active_company_id is not None and callable(db_list_company_documents_func):
+  # Wenn kein Zusammenführen mit Anhängen gewünscht oder PyPDF fehlt          product_ids_for_datasheets = list(set(product_ids_for_datasheets))                if doc_info.get('id') in company_document_ids_to_include_opt:
+  if not (include_all_documents_opt and _PYPDF_AVAILABLE):          for prod_id in product_ids_for_datasheets:                        full_doc_path = os.path.join(COMPANY_DOCS_BASE_DIR_PDF_GEN, relative_doc_path)
+      # Keine Anhänge mergen, direkt zurück                  product_info = get_product_by_id_func(prod_id)                        else:
+      return main_pdf_bytes                      datasheet_path_from_db = product_info.get("datasheet_link_db_path")        except Exception as e_company_docs:
+                            full_datasheet_path = os.path.join(PRODUCT_DATASHEETS_BASE_DIR_PDF_GEN, datasheet_path_from_db)    debug_info['total_paths_to_append'] = len(paths_to_append)
+  debug_info = {                              paths_to_append.append(full_datasheet_path)    
+      'product_datasheets_missing': [],                          else:        for page in main_offer_reader.pages: 
+      'company_docs_found': [],                      else:
+      'company_docs_missing': [],                  else:            datasheet_reader = PdfReader(pdf_path)
+      'total_paths_to_append': 0              except Exception:        except Exception as e_append_ds:
+  }                          pdf_writer.write(final_buffer)
+            if company_document_ids_to_include_opt and active_company_id is not None and callable(db_list_company_documents_func):        return main_pdf_bytes 
+  # Produktdatenblätter sammeln                  all_company_docs_for_active_co = db_list_company_documents_func(active_company_id, None)
+deproduct_ids_for_datasheets = list(filter(None, [                      if doc_info.get('id') in company_document_ids_to_include_opt:    
+      pv_details_pdf.get("selected_module_id"),                          if relative_doc_path:        texts: Text-Dictionary
+      pv_details_pdf.get("selected_inverter_id"),                              if os.path.exists(full_doc_path):    """
+      pv_details_pdf.get("selected_storage_id") if pv_details_pdf.get("include_storage") else None                                  debug_info['company_docs_found'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'path': full_doc_path})        'critical_errors': [],
+  ]))                                  debug_info['company_docs_missing'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'path': full_doc_path})    # Kundendaten prüfen (nicht kritisch)
+  for opt_id_key in ['selected_wallbox_id', 'selected_ems_id', 'selected_optimizer_id', 'selected_carport_id', 'selected_notstrom_id', 'selected_tierabwehr_id']:                              debug_info['company_docs_missing'].append({'id': doc_info.get('id'), 'name': doc_info.get('display_name'), 'reason': 'Kein relativer Pfad in DB'})            get_text(texts, 'pdf_warning_no_customer_name', 'Kein Kundenname verfügbar - wird als "Kunde" angezeigt')
+      comp_id_val = pv_details_pdf.get(opt_id_key)                  pass    # PV-Details prüfen
+      if comp_id_val:          debug_info['total_paths_to_append'] = len(paths_to_append)    # Entweder module in pv_details ODER module_quantity in project_details ist ausreichend
+          product_ids_for_datasheets.append(comp_id_val)          if not paths_to_append:    elif project_details and project_details.get('module_quantity', 0) > 0:
+  product_ids_for_datasheets = list(set(product_ids_for_datasheets))                  validation_result['warnings'].append(
+            try:        # Nur als Warnung, nicht als kritischer Fehler
+  paths_to_append = []              for page in main_offer_reader.pages:        # Wirklich leere oder sehr minimale Analyse ist ein kritischer Fehler
+            except Exception:        validation_result['is_valid'] = False
+  # Produktdatenblätter-Pfade ermitteln          # und geben nur Warnungen aus, wenn wichtige KPIs fehlen
+  if callable(get_product_by_id_func):          for pdf_path in paths_to_append:            if not analysis_results.get(kpi):
+      for prod_id in product_ids_for_datasheets:                  datasheet_reader = PdfReader(pdf_path)            missing_kpi_names = ', '.join(missing_kpis)
+          try:                      pdf_writer.add_page(page)            validation_result['missing_data_summary'].extend(missing_kpis)
+              product_info = get_product_by_id_func(prod_id)              except Exception:    if not project_data.get('company_information', {}).get('name'):
+              if product_info:          validation_result['missing_data_summary'].append('Firmendaten')
+                  datasheet_path_from_db = product_info.get("datasheet_link_db_path")          try:          f"Warnungen={len(validation_result['warnings'])}, "
+                  if datasheet_path_from_db:              final_pdf_bytes = final_buffer.getvalue()def _create_no_data_fallback_pdf(texts: Dict[str, str], customer_data: Dict[str, Any] = None) -> bytes:
+                      full_datasheet_path = os.path.join(PRODUCT_DATASHEETS_BASE_DIR_PDF_GEN, datasheet_path_from_db)          except Exception:    Args:
+                      if os.path.exists(full_datasheet_path):          finally:    Returns:
+                          paths_to_append.append(full_datasheet_path)    from reportlab.lib.units import cm
+                      else:    
+                          debug_info['product_datasheets_missing'].append({    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+                              'id': prod_id,    story = []
+                              'model': product_info.get('model_name'),    # Titel
+                              'path': full_datasheet_path    story.append(Paragraph(title, styles['Title']))
+                          })    
+                  else:    if customer_data and customer_data.get('last_name'):
+                      debug_info['product_datasheets_missing'].append({        customer_text = get_text(texts, 'pdf_no_data_customer', f'Für: {customer_name}')
+                          'id': prod_id,        story.append(Spacer(1, 0.5*cm))
+                          'model': product_info.get('model_name'),    # Haupttext
+                          'reason': 'Kein Datenblatt-Pfad in DB'        '''Liebe Kundin, lieber Kunde,
+                      })        für die Erstellung Ihres individuellen Photovoltaik-Angebots benötigen wir noch einige wichtige Informationen:
+              else:        <b>Erforderliche Daten:</b>
+                  debug_info['product_datasheets_missing'].append({        • Gewünschte PV-Module und Komponenten
+                      'id': prod_id,        • Technische Angaben zu Ihrem Dach/Standort
+                      'reason': 'Produkt nicht in DB gefunden'        <b>Nächste Schritte:</b>
+                  })        2. Führen Sie die Wirtschaftlichkeitsberechnung durch
+          except:        
+              pass    
+      story.append(Spacer(1, 1*cm))
+  # Firmendokumente sammeln    # Kontaktinformationen
+  if company_document_ids_to_include_opt and active_company_id is not None and callable(db_list_company_documents_func):        'Kontakt: Bitte wenden Sie sich an unser Beratungsteam für weitere Unterstützung.')
+      try:    
+          all_company_docs_for_active_co = db_list_company_documents_func(active_company_id, None)    buffer.seek(0)
+          for doc_info in all_company_docs_for_active_co:    
+#             if doc_info.get('id') in company_document_ids_to_include_opt:# 2025-06-03, Gemini Ultra: PageNumCanvas.save() korrigiert, um Duplizierung des PDF-Inhalts zu verhindern.
+#                 relative_doc_path = doc_info.get("relative_db_path")#                           Aufruf von `db_list_company_documents_func` mit `doc_type=None` versehen.
+#                 if relative_doc_path:#                           Sicherstellung, dass ausgewählte Diagramme für PDF-Visualisierungen berücksichtigt werden.
+#                     full_doc_path = os.path.join(COMPANY_DOCS_BASE_DIR_PDF_GEN, relative_doc_path)# 2025-06-03, Gemini Ultra: `charts_config_for_pdf_generator` erweitert, um alle Diagramme aus `pdf_ui.py` abzudecken.
+#                     if os.path.exists(full_doc_path):#                           Logik zum Anhängen von Produktdatenblättern erweitert, um auch Zubehör-Datenblätter zu berücksichtigen.
+#                         paths_to_append.append(full_doc_path)# 2025-06-03, Gemini Ultra: Validierungs- und Fallback-Funktionen für PDF-Erstellung ohne ausreichende Daten hinzugefügt.
+#                         debug_info['company_docs_found'].append({                            'id': doc_info.get('id'),                            'name': doc_info.get('display_name'),                            'path': full_doc_path                        })                    else:                        debug_info['company_docs_missing'].append({                            'id': doc_info.get('id'),                            'name': doc_info.get('display_name'),                            'path': full_doc_path                        })                else:                    debug_info['company_docs_missing'].append({                        'id': doc_info.get('id'),                        'name': doc_info.get('display_name'),                        'reason': 'Kein relativer Pfad in DB'                    })    except:        passdebug_info['total_paths_to_append'] = len(paths_to_append)if not paths_to_append:    # Keine zusätzlichen PDFs    return main_pdf_bytes# Haupt-PDF einlesen und Seiten in Writer übertragenpdf_writer = PdfWriter()try:    main_offer_reader = PdfReader(io.BytesIO(main_pdf_bytes))    for page in main_offer_reader.pages:        pdf_writer.add_page(page)except Exception as e_read_main:    return main_pdf_bytes# Weitere PDFs anhängenfor pdf_path in paths_to_append:    try:        datasheet_reader = PdfReader(pdf_path)        for page in datasheet_reader.pages:            pdf_writer.add_page(page)    except:        pass# Neues PDF zusammenbauenfinal_buffer = io.BytesIO()try:    pdf_writer.write(final_buffer)    final_pdf_bytes = final_buffer.getvalue()finally:    final_buffer.close()return final_pdf_bytesreturn final_pdf_bytesn.

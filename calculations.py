@@ -762,7 +762,7 @@ def perform_calculations(
     results['total_investment_netto'] = total_investment_netto
     results['vat_rate_percent'] = vat_rate_percent # MwSt.-Satz
     results['total_investment_brutto'] = total_investment_netto * (1 + vat_rate_percent / 100.0)
-    # if app_debug_mode_is_enabled: print(f"CALC: Endgültige Kosten: base_matrix={results['base_matrix_price_netto']:.2f}, total_additional={total_additional_costs_netto:.2f}, subtotal_netto={subtotal_netto:.2f}, total_investment_netto={total_investment_netto:.2f}, total_investment_brutto={results['total_investment_brutto']:.2f}") # Bereinigt
+    # if app_debug_mode_is_enabled: print(f"CALC: Endgültige Kosten: base_matrix={results['base_matrix_price_netto']:.2f}, total_additional={total_additional_costs_netto:.2f}, subtotal_netto={subtotal_netto:.2f}, total_investment_netto={total_investment_netto:.2f}, c={results['total_investment_brutto']:.2f}") # Bereinigt
 
     # --- Wirtschaftlichkeitsberechnung (Jahr 1) ---
     annual_electricity_cost_savings_self_consumption_year1 = eigenverbrauch_pro_jahr_kwh * electricity_price_kwh
